@@ -1,4 +1,4 @@
-# 🔄 Integração Solides - Active Directory + Sistemas
+# Integração Solides - Active Directory + Sistemas
 
 Sistema automatizado que recebe webhooks do Solides quando um colaborador é demitido e executa:
 
@@ -16,7 +16,7 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 Solides → Webhook → ngrok → Servidor Local → AD + CRM + SAW + GIU + GED + NextQS + Email
 ```
 
-## 🚀 Instalação
+## Instalação
 
 ```bash
 # Criar ambiente virtual
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## ⚙️ Configuração
+## Configuração
 
 ### 1. Criar arquivo `.env`
 
@@ -89,7 +89,7 @@ winget install ngrok.ngrok
 ngrok config add-authtoken SEU_TOKEN
 ```
 
-## ▶️ Execução
+## Execução
 
 ### 1. Iniciar servidor
 ```bash
@@ -110,7 +110,7 @@ ngrok http 3000
 | Header | `X-Webhook-Secret` |
 | Valor | sua chave do .env |
 
-## 📁 Estrutura
+## Estrutura
 
 ```
 ├── server.py              # Servidor Flask principal
@@ -119,7 +119,6 @@ ngrok http 3000
 ├── rpa_giu.py             # RPA - GIU Unimed (CPF)
 ├── rpa_ged.py             # RPA - GED Bye Bye Paper (email)
 ├── rpa_nextqs.py          # RPA - NextQS Manager (email)
-├── inspecionar_pagina.py  # Ferramenta para mapear novos sites
 ├── env.example            # Template de variáveis
 ├── requirements.txt       # Dependências Python
 └── README.md              # Documentação
@@ -134,7 +133,7 @@ ngrok http 3000
 | `/consulta-ad` | POST | Consulta usuário no AD |
 | `/sistemas/status` | GET | Status dos sistemas RPA |
 
-## 🤖 Sistemas Integrados
+## Sistemas Integrados
 
 | Sistema | Script | Identificador | Ação |
 |---------|--------|---------------|------|
@@ -148,14 +147,14 @@ ngrok http 3000
 ## 📧 Email de Notificação
 
 ```
-🚨 NOTIFICAÇÃO: Colaborador Demitido - Nome
+NOTIFICAÇÃO: Colaborador Demitido - Nome
 
-📋 Informações do Colaborador
+Informações do Colaborador
 ├── Nome, CPF, Email
 ├── Setor, Cargo, Matrícula
 └── Data Demissão
 
-🔒 Inativações Realizadas
+Inativações Realizadas
 ├── AD (Active Directory): ✅ Desativado
 ├── CRM JMJ:               ✅ Desativado
 ├── SAW:                   ✅ Desativado
@@ -163,25 +162,15 @@ ngrok http 3000
 ├── GED (Bye Bye Paper):   ✅ Bloqueado
 └── NextQS Manager:        ✅ Desativado
 
-⚠️ Ações Recomendadas
+Ações Recomendadas
 ├── Revogar acessos VPN
 ├── Verificar outros sistemas
 └── Recolher equipamentos
 ```
 
-## 🛡️ Proteção contra Duplicatas
+## Proteção contra Duplicatas
 
 O sistema bloqueia o mesmo CPF por **5 minutos** para evitar processamento duplicado.
-
-## 🔧 Criando RPA para Novos Sites
-
-Use o script de inspeção para mapear elementos de novos sistemas:
-
-```bash
-python inspecionar_pagina.py https://novo-sistema.com/login
-```
-
-O gravador captura cliques e digitação, gerando o código automaticamente.
 
 ---
 
