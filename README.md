@@ -2,6 +2,28 @@
 
 Este projeto surgiu a partir de um desafio proposto pela coordenação, com o objetivo de automatizar o processo de inativação de acessos de colaboradores desligados da empresa. A solução desenvolvida elimina a necessidade de acionamento manual do setor de TI pelo Departamento Pessoal a cada demissão, reduzindo riscos de segurança, tempo operacional e dependência de processos manuais.
 
+## Tecnologias Utilizadas
+
+| Tecnologia | Versão | Descrição |
+|------------|--------|-----------|
+| **Python** | 3.11+ | Linguagem principal |
+| **Flask** | 3.1.2 | Framework web para API REST |
+| **Flask-CORS** | 4.0.0 | Suporte a Cross-Origin Resource Sharing |
+| **LDAP3** | 2.9.1 | Conexão com Active Directory |
+| **Playwright** | 1.40.0 | Automação de navegador (RPA) |
+| **python-dotenv** | 1.0.0 | Gerenciamento de variáveis de ambiente |
+| **Requests** | 2.32.5 | Cliente HTTP |
+| **ngrok** | - | Túnel para expor servidor local |
+| **SMTP** | - | Envio de emails de notificação |
+
+### Arquitetura
+
+- **Backend:** API REST com Flask
+- **Integração AD:** Protocolo LDAP sobre SSL (LDAPS)
+- **RPA:** Playwright com Chromium headless
+- **Webhooks:** Recebimento de eventos do Solides
+- **Notificações:** Email via SMTP (Gmail)
+
 ## Fluxo
 
 ```
