@@ -10,7 +10,7 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 - ✅ Desativa no **NextQS Manager**
 - ✅ Envia **email de notificação** para o TI
 
-## 📊 Fluxo
+## Fluxo
 
 ```
 Solides → Webhook → ngrok → Servidor Local → AD + CRM + SAW + GIU + GED + NextQS + Email
