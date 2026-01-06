@@ -194,3 +194,5 @@ if __name__ == '__main__':
     
     resultado = executar_nextqs_automatico(email)
     sys.exit(resultado)
+
+

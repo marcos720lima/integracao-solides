@@ -82,6 +82,12 @@ SISTEMAS_CONFIG = {
         'script': 'rpa_nextqs.py',
         'timeout': 300,
         'nome': 'NextQS Manager'
+    },
+    'bplus': {
+        'ativo': True,
+        'script': 'rpa_bplus.py',
+        'timeout': 300,
+        'nome': 'B+ Reembolso'
     }
 }
 
@@ -202,7 +208,7 @@ def desativar_usuario_por_cpf(cpf):
             authentication='SIMPLE'
         )
         
-        logger.info("[OK] Conectado no AD para desativação")
+        logger.info("Conectado no AD para desativação")
         
         search_filter = f"(&(objectClass=user)(employeeID={cpf}))"
         attributes = ['userAccountControl', 'sAMAccountName', 'employeeID', 'cn', 'displayName']
@@ -312,6 +318,7 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
         status_giu = "Não executado"
         status_ged = "Não executado"
         status_nextqs = "Não executado"
+        status_bplus = "Não executado"
         
         def obter_status_formatado(sistema):
             status = sistema.get('status')
@@ -347,6 +354,8 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
                         status_ged = f"Erro: {sistema.get('erro', 'Erro')[:40]}"
                 elif 'NEXTQS' in nome_sistema:
                     status_nextqs = obter_status_formatado(sistema)
+                elif 'BPLUS' in nome_sistema or 'B+' in nome_sistema or 'REEMBOLSO' in nome_sistema:
+                    status_bplus = obter_status_formatado(sistema)
         
         nome_colaborador = dados_colaborador.get('nome', 'N/A')
         setor = dados_colaborador.get('departamento', {}).get('nome', 'N/A')
@@ -397,6 +406,7 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
                         <tr><td>GIU Unimed:</td><td>{status_giu}</td></tr>
                         <tr><td>GED (Bye Bye Paper):</td><td>{status_ged}</td></tr>
                         <tr><td>NextQS Manager:</td><td>{status_nextqs}</td></tr>
+                        <tr><td>B+ Reembolso:</td><td>{status_bplus}</td></tr>
                     </table>
                 </div>
                 

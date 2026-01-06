@@ -1,13 +1,3 @@
-"""
-RPA GIU - Desativa usuarios no GIU Unimed
-
-Codigos de saida:
-- 0 = Desativado com sucesso
-- 1 = Erro
-- 2 = Ja estava inativo
-- 3 = Nao encontrado (nao possui acesso)
-"""
-
 import sys
 import time
 import os

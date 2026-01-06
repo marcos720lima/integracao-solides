@@ -1,13 +1,3 @@
-"""
-RPA GED Bye Bye Paper - Bloqueia usuarios no GED
-
-Codigos de saida:
-- 0 = Bloqueado com sucesso
-- 1 = Erro
-- 2 = Ja estava bloqueado
-- 3 = Nao encontrado (nao possui acesso)
-"""
-
 import sys
 import time
 import os

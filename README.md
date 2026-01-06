@@ -1,4 +1,4 @@
-# 🔄 Integração Solides - Active Directory + Sistemas
+# Integração Solides - Active Directory + Sistemas
 
 Sistema automatizado que recebe webhooks do Solides quando um colaborador é demitido e executa:
 
@@ -8,15 +8,38 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 - ✅ Desativa no **GIU Unimed**
 - ✅ Bloqueia no **GED Bye Bye Paper**
 - ✅ Desativa no **NextQS Manager**
+- ✅ Desativa no **B+ Reembolso**
 - ✅ Envia **email de notificação** para o TI
 
-## 📊 Fluxo
+## Tecnologias Utilizadas
+
+| Tecnologia | Versão | Descrição |
+|------------|--------|-----------|
+| **Python** | 3.11+ | Linguagem principal |
+| **Flask** | 3.1.2 | Framework web para API REST |
+| **Flask-CORS** | 4.0.0 | Suporte a Cross-Origin Resource Sharing |
+| **LDAP3** | 2.9.1 | Conexão com Active Directory |
+| **Playwright** | 1.40.0 | Automação de navegador (RPA) |
+| **python-dotenv** | 1.0.0 | Gerenciamento de variáveis de ambiente |
+| **Requests** | 2.32.5 | Cliente HTTP |
+| **ngrok** | - | Túnel para expor servidor local |
+| **SMTP** | - | Envio de emails de notificação |
+
+### Arquitetura
+
+- **Backend:** API REST com Flask
+- **Integração AD:** Protocolo LDAP sobre SSL (LDAPS)
+- **RPA:** Playwright com Chromium headless
+- **Webhooks:** Recebimento de eventos do Solides
+- **Notificações:** Email via SMTP (Gmail)
+
+## Fluxo
 
 ```
-Solides → Webhook → ngrok → Servidor Local → AD + CRM + SAW + GIU + GED + NextQS + Email
+Solides → Webhook → ngrok → Servidor Local → AD + CRM + SAW + GIU + GED + NextQS + B+ + Email
 ```
 
-## 🚀 Instalação
+## Instalação
 
 ```bash
 # Criar ambiente virtual
@@ -30,7 +53,7 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## ⚙️ Configuração
+## Configuração
 
 ### 1. Criar arquivo `.env`
 
@@ -80,6 +103,11 @@ GED_PASSWORD=senha
 NEXTQS_URL=https://manager.nextqs.com
 NEXTQS_USERNAME=seu-email@empresa.com
 NEXTQS_PASSWORD=sua-senha
+
+# B+ Reembolso
+BPLUS_URL=https://bplus.unimedoestedopara.coop.br
+BPLUS_USERNAME=usuario
+BPLUS_PASSWORD=senha
 ```
 
 ### 2. Instalar ngrok
@@ -89,7 +117,7 @@ winget install ngrok.ngrok
 ngrok config add-authtoken SEU_TOKEN
 ```
 
-## ▶️ Execução
+## Execução
 
 ### 1. Iniciar servidor
 ```bash
@@ -110,7 +138,7 @@ ngrok http 3000
 | Header | `X-Webhook-Secret` |
 | Valor | sua chave do .env |
 
-## 📁 Estrutura
+## Estrutura
 
 ```
 ├── server.py              # Servidor Flask principal
@@ -119,13 +147,14 @@ ngrok http 3000
 ├── rpa_giu.py             # RPA - GIU Unimed (CPF)
 ├── rpa_ged.py             # RPA - GED Bye Bye Paper (email)
 ├── rpa_nextqs.py          # RPA - NextQS Manager (email)
+├── rpa_bplus.py           # RPA - B+ Reembolso (nome de conta)
 ├── inspecionar_pagina.py  # Ferramenta para mapear novos sites
 ├── env.example            # Template de variáveis
 ├── requirements.txt       # Dependências Python
 └── README.md              # Documentação
 ```
 
-## 🔌 Endpoints
+## Endpoints
 
 | Endpoint | Método | Descrição |
 |----------|--------|-----------|
@@ -134,7 +163,7 @@ ngrok http 3000
 | `/consulta-ad` | POST | Consulta usuário no AD |
 | `/sistemas/status` | GET | Status dos sistemas RPA |
 
-## 🤖 Sistemas Integrados
+## Sistemas Integrados
 
 | Sistema | Script | Identificador | Ação |
 |---------|--------|---------------|------|
@@ -144,36 +173,38 @@ ngrok http 3000
 | GIU Unimed | `rpa_giu.py` | CPF | Desativa conta |
 | GED Bye Bye Paper | `rpa_ged.py` | Email (busca por nome) | Bloqueia usuário |
 | NextQS Manager | `rpa_nextqs.py` | Email | Desativa usuário |
+| B+ Reembolso | `rpa_bplus.py` | Nome de conta (ex: douglas.barreto) | Inativa usuário |
 
-## 📧 Email de Notificação
+## Email de Notificação
 
 ```
-🚨 NOTIFICAÇÃO: Colaborador Demitido - Nome
+NOTIFICAÇÃO: Colaborador Demitido - Nome
 
-📋 Informações do Colaborador
+Informações do Colaborador
 ├── Nome, CPF, Email
 ├── Setor, Cargo, Matrícula
 └── Data Demissão
 
-🔒 Inativações Realizadas
-├── AD (Active Directory): ✅ Desativado
-├── CRM JMJ:               ✅ Desativado
-├── SAW:                   ✅ Desativado
-├── GIU Unimed:            ✅ Desativado
-├── GED (Bye Bye Paper):   ✅ Bloqueado
-└── NextQS Manager:        ✅ Desativado
+Inativações Realizadas
+├── AD (Active Directory): Desativado
+├── CRM JMJ:               Desativado
+├── SAW:                   Desativado
+├── GIU Unimed:            Desativado
+├── GED (Bye Bye Paper):   Bloqueado
+├── NextQS Manager:        Desativado
+└── B+ Reembolso:          Inativado
 
-⚠️ Ações Recomendadas
+Ações Recomendadas
 ├── Revogar acessos VPN
 ├── Verificar outros sistemas
 └── Recolher equipamentos
 ```
 
-## 🛡️ Proteção contra Duplicatas
+## Proteção contra Duplicatas
 
 O sistema bloqueia o mesmo CPF por **5 minutos** para evitar processamento duplicado.
 
-## 🔧 Criando RPA para Novos Sites
+## Criando RPA para Novos Sites
 
 Use o script de inspeção para mapear elementos de novos sistemas:
 
@@ -186,4 +217,4 @@ O gravador captura cliques e digitação, gerando o código automaticamente.
 ---
 
 **Desenvolvido por:** Marcos Vinicius Viana Lima  
-**Versão:** 2.2
+**Versão:** 2.3
