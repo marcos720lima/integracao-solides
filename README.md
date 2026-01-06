@@ -1,6 +1,6 @@
 # Integração Solides - Active Directory + Sistemas
 
-Sistema automatizado que recebe webhooks do Solides quando um colaborador é demitido e executa:
+Este projeto surgiu a partir de um desafio proposto pela coordenação, com o objetivo de automatizar o processo de inativação de acessos de colaboradores desligados da empresa. A solução desenvolvida elimina a necessidade de acionamento manual do setor de TI pelo Departamento Pessoal a cada demissão, reduzindo riscos de segurança, tempo operacional e dependência de processos manuais.
 
 - ✅ Desativa o usuário no **Active Directory**
 - ✅ Desativa no **CRM JMJ**
@@ -12,7 +12,6 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 - ✅ Envia **email de notificação** para o TI
 
 ## Tecnologias Utilizadas
-
 | Tecnologia | Versão | Descrição |
 |------------|--------|-----------|
 | **Python** | 3.11+ | Linguagem principal |
@@ -186,13 +185,13 @@ Informações do Colaborador
 └── Data Demissão
 
 Inativações Realizadas
-├── AD (Active Directory): Desativado
-├── CRM JMJ:               Desativado
-├── SAW:                   Desativado
-├── GIU Unimed:            Desativado
-├── GED (Bye Bye Paper):   Bloqueado
-├── NextQS Manager:        Desativado
-└── B+ Reembolso:          Inativado
+├── AD (Active Directory): ✅ Desativado
+├── CRM JMJ:               ✅ Desativado
+├── SAW:                   ✅ Desativado
+├── GIU Unimed:            ✅ Desativado
+├── GED (Bye Bye Paper):   ✅ Bloqueado
+├── NextQS Manager:        ✅ Desativado
+└── B+ Reembolso:          ✅ Inativado
 
 Ações Recomendadas
 ├── Revogar acessos VPN
@@ -213,7 +212,6 @@ python inspecionar_pagina.py https://novo-sistema.com/login
 ```
 
 O gravador captura cliques e digitação, gerando o código automaticamente.
-
 ---
 
 **Desenvolvido por:** Marcos Vinicius Viana Lima  

@@ -1,3 +1,13 @@
+"""
+RPA B+ Reembolso - Inativa usuarios no B+ Reembolso
+
+Codigos de saida:
+- 0 = Inativado com sucesso
+- 1 = Erro
+- 2 = Ja estava inativo
+- 3 = Nao encontrado (nao possui acesso)
+"""
+
 import sys
 import time
 import os
