@@ -31,26 +31,7 @@ def executar_saw_automatico(email_usuario):
     print("=" * 60)
     print(f"Email: {email_usuario}")
     
-    dialogo_confirmado = False
-    dialogo_ja_inativo = False
     browser = None
-    
-    def confirmar_dialogo(dialog):
-        nonlocal dialogo_confirmado, dialogo_ja_inativo
-        try:
-            msg = dialog.message.upper()
-            print(f"   Dialog: {dialog.message}")
-            
-            if "DESATIVAR" in msg:
-                dialog.accept()
-                dialogo_confirmado = True
-            elif "JA ESTA" in msg or "INATIVO" in msg or "DESATIVADO" in msg:
-                dialog.accept()
-                dialogo_ja_inativo = True
-            else:
-                dialog.dismiss()
-        except Exception as e:
-            print(f"   Erro no dialog: {str(e)}")
     
     with sync_playwright() as p:
         try:
@@ -60,7 +41,6 @@ def executar_saw_automatico(email_usuario):
                 args=["--window-size=600,400", "--window-position=3000,3000"]
             )
             page = browser.new_page()
-            page.on("dialog", confirmar_dialogo)
             
             try:
                 print("PASSO 1: Fazendo login...")
@@ -97,6 +77,10 @@ def executar_saw_automatico(email_usuario):
                     return JA_INATIVO
                 
                 print("PASSO 4: Clicando em desativar...")
+                
+                # Sobrescrever confirm() para sempre retornar true
+                page.evaluate("window.confirm = () => true;")
+                
                 try:
                     icone_desativar.first.click()
                 except:
@@ -105,32 +89,36 @@ def executar_saw_automatico(email_usuario):
                     except:
                         page.click("img[title*='Desativar'], img[alt*='Desativar']")
                 
-                print("   Aguardando confirmacao...")
-                contador = 0
-                while not dialogo_confirmado and not dialogo_ja_inativo and contador < 30:
-                    time.sleep(1)
-                    contador += 1
+                print("   Aguardando processamento...")
+                time.sleep(3)
                 
-                if dialogo_ja_inativo:
-                    print("   Usuario ja estava inativo!")
-                    print("STATUS: JA_INATIVO")
-                    return JA_INATIVO
+                # Verificar se desativou (recarregar e buscar novamente)
+                page.reload()
+                time.sleep(2)
                 
-                if dialogo_confirmado:
-                    time.sleep(3)
+                page.fill(campo, email_usuario)
+                page.press(campo, "Enter")
+                time.sleep(3)
+                
+                icone_ativar_depois = page.locator("img[src*='ativarUsuario']")
+                icone_desativar_depois = page.locator("img[src*='desativarUsuario']")
+                
+                if icone_ativar_depois.count() > 0 and icone_desativar_depois.count() == 0:
                     print("=" * 60)
                     print(f"SAW: Usuario {email_usuario} desativado!")
                     print("=" * 60)
                     print("STATUS: SUCESSO")
                     return SUCESSO
-                else:
-                    time.sleep(5)
-                    if dialogo_confirmado:
-                        print("STATUS: SUCESSO")
-                        return SUCESSO
-                    print("   Falha ao confirmar desativacao")
+                elif icone_desativar_depois.count() > 0:
+                    print("   Falha - usuario ainda ativo")
                     print("STATUS: ERRO")
                     return ERRO
+                else:
+                    print("=" * 60)
+                    print(f"SAW: Usuario {email_usuario} provavelmente desativado!")
+                    print("=" * 60)
+                    print("STATUS: SUCESSO")
+                    return SUCESSO
                 
             except Exception as e:
                 print(f"Erro no SAW: {str(e)}")
