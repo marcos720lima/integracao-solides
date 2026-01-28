@@ -7,9 +7,10 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 - ✅ Desativa no **SAW**
 - ✅ Desativa no **GIU Unimed**
 - ✅ Bloqueia no **GED Bye Bye Paper**
-- ✅ Desativa no **NextQS Manager**
 - ✅ Desativa no **B+ Reembolso**
 - ✅ Envia **email de notificação** para o TI
+
+> Observação: **NextQS Manager está desativado no processo atualmente** (não é executado).
 
 ## Tecnologias Utilizadas
 
@@ -37,6 +38,8 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 
 ```
 Solides → Webhook → ngrok → Servidor Local → AD + CRM + SAW + GIU + GED + NextQS + B+ + Email
+
+> Observação: **NextQS não é executado** no momento.
 ```
 
 ## Instalação
@@ -99,7 +102,7 @@ GED_CONTA=GED0000000
 GED_USERNAME=usuario
 GED_PASSWORD=senha
 
-# NextQS Manager
+# NextQS Manager (desativado atualmente no processo)
 NEXTQS_URL=https://manager.nextqs.com
 NEXTQS_USERNAME=seu-email@empresa.com
 NEXTQS_PASSWORD=sua-senha
@@ -146,8 +149,9 @@ ngrok http 3000
 ├── rpa_saw.py             # RPA - SAW (email)
 ├── rpa_giu.py             # RPA - GIU Unimed (CPF)
 ├── rpa_ged.py             # RPA - GED Bye Bye Paper (email)
-├── rpa_nextqs.py          # RPA - NextQS Manager (email)
+├── rpa_nextqs.py          # RPA - NextQS Manager (desativado)
 ├── rpa_bplus.py           # RPA - B+ Reembolso (nome de conta)
+├── rpa_tasy.py            # RPA - Tasy EMR (nome completo + nome de conta)
 ├── inspecionar_pagina.py  # Ferramenta para mapear novos sites
 ├── env.example            # Template de variáveis
 ├── requirements.txt       # Dependências Python
@@ -172,8 +176,9 @@ ngrok http 3000
 | SAW | `rpa_saw.py` | Email | Desativa usuário |
 | GIU Unimed | `rpa_giu.py` | CPF | Desativa conta |
 | GED Bye Bye Paper | `rpa_ged.py` | Email (busca por nome) | Bloqueia usuário |
-| NextQS Manager | `rpa_nextqs.py` | Email | Desativa usuário |
+| NextQS Manager | `rpa_nextqs.py` | Email | **Desativado no processo** |
 | B+ Reembolso | `rpa_bplus.py` | Nome de conta (ex: douglas.barreto) | Inativa usuário |
+| Tasy EMR | `rpa_tasy.py` | Nome completo + nome de conta | Inativa usuário |
 
 ## Email de Notificação
 
@@ -191,8 +196,9 @@ Inativações Realizadas
 ├── SAW:                   Desativado
 ├── GIU Unimed:            Desativado
 ├── GED (Bye Bye Paper):   Bloqueado
-├── NextQS Manager:        Desativado
-└── B+ Reembolso:          Inativado
+├── NextQS Manager:        Não executado
+├── B+ Reembolso:          Inativado
+└── Tasy EMR:              Inativado
 
 Ações Recomendadas
 ├── Revogar acessos VPN

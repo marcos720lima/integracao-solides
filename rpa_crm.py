@@ -1,3 +1,5 @@
+"""RPA CRM JMJ - Desativa usuarios no CRM"""
+
 import sys
 import time
 import os
@@ -15,14 +17,9 @@ ERRO = 1
 JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
+
 def executar_crm_automatico(email_usuario):
-    print("=" * 60)
-    print("AUTOMATIZANDO CRM JMJ")
-    print("=" * 60)
-    print(f"Email: {email_usuario}")
-    
     nome_usuario = email_usuario.split('@')[0].replace('.', ' ').lower()
-    print(f"Buscando por: {nome_usuario}")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -33,7 +30,6 @@ def executar_crm_automatico(email_usuario):
         page = browser.new_page()
         
         try:
-            print("PASSO 1: Fazendo login...")
             page.goto(f"{CRM_URL}/#/authenticate", timeout=60000)
             page.wait_for_load_state("domcontentloaded", timeout=30000)
             time.sleep(3)
@@ -50,15 +46,12 @@ def executar_crm_automatico(email_usuario):
             page.evaluate("angular.element(document.querySelector(\"input[name='senha']\")).scope().$apply()")
             
             page.click("[ng-click='login(credentials)']")
-            print("   Login realizado!")
             time.sleep(8)
             
-            print("PASSO 2: Navegando para usuarios...")
             page.goto(f"{CRM_URL}/#/configuracoes/usuarios", timeout=30000)
             page.wait_for_load_state("domcontentloaded", timeout=15000)
             time.sleep(3)
             
-            print(f"PASSO 3: Buscando usuario: {email_usuario}")
             page.fill("input[ng-model='search.email']", email_usuario)
             page.click("button[ng-click='pesquisar(search)']")
             time.sleep(3)
@@ -83,8 +76,6 @@ def executar_crm_automatico(email_usuario):
                     pass
             
             if not usuario_divs:
-                print("   Usuario nao encontrado no CRM!")
-                print("STATUS: NAO_ENCONTRADO")
                 return NAO_ENCONTRADO
             
             sucesso = False
@@ -119,22 +110,16 @@ def executar_crm_automatico(email_usuario):
                     continue
             
             if not sucesso:
-                print("   Nao conseguiu abrir edicao do usuario")
-                print("STATUS: NAO_ENCONTRADO")
                 return NAO_ENCONTRADO
             
-            print("PASSO 4: Verificando status atual...")
             try:
                 toggle = page.locator("jmj-toggle button, button[tabindex='-1']").first
                 toggle_class = toggle.get_attribute("class") or ""
                 if "off" in toggle_class.lower() or "inactive" in toggle_class.lower():
-                    print("   Usuario ja esta INATIVO!")
-                    print("STATUS: JA_INATIVO")
                     return JA_INATIVO
             except:
                 pass
             
-            print("PASSO 5: Desativando usuario...")
             try:
                 page.click("button[ng-click='ingDisabled ? ngModel = !ngModel : null']")
             except:
@@ -145,19 +130,12 @@ def executar_crm_automatico(email_usuario):
             
             time.sleep(2)
             
-            print("PASSO 6: Salvando...")
             page.click("button.btn.btn-flat.btn-tumblr:has-text('Salvar')")
             time.sleep(3)
             
-            print("=" * 60)
-            print(f"CRM JMJ: Usuario {email_usuario} desativado!")
-            print("=" * 60)
-            print("STATUS: SUCESSO")
             return SUCESSO
                 
         except Exception as e:
-            print(f"Erro no CRM: {str(e)}")
-            print("STATUS: ERRO")
             return ERRO
         finally:
             browser.close()

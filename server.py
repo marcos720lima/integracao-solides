@@ -8,11 +8,6 @@ Autor: Marcos Vinicius Viana Lima
 Versão: 2.3
 """
 
-# =============================================================================
-# IMPORTS
-# =============================================================================
-
-# Standard library
 import json
 import logging
 import os
@@ -24,29 +19,21 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-# Third-party libraries
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
 
-# =============================================================================
-# CONFIGURAÇÕES
-# =============================================================================
-
 load_dotenv()
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Active Directory
 AD_URL = os.getenv('AD_URL')
 AD_USER = os.getenv('AD_USER')
 AD_PASS = os.getenv('AD_PASS')
 BASE_DN = os.getenv('BASE_DN')
 
-# Email
 EMAIL_CONFIG = {
     'smtp_server': os.getenv('EMAIL_SMTP_SERVER', 'smtp.gmail.com'),
     'smtp_port': int(os.getenv('EMAIL_SMTP_PORT', 587)),
@@ -54,25 +41,18 @@ EMAIL_CONFIG = {
     'password': os.getenv('EMAIL_PASSWORD')
 }
 
-# Webhook
 WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET')
 TI_EMAILS = os.getenv('TI_EMAILS', '').split(',')
 
-# Controle de duplicatas
 cpfs_processados = {}
-TEMPO_BLOQUEIO_DUPLICATA = 300  # 5 minutos
+TEMPO_BLOQUEIO_DUPLICATA = 300
 
-# Constantes de status
 STATUS_NAO_EXECUTADO = "Não executado"
 STATUS_DESATIVADO = "Desativado"
 STATUS_BLOQUEADO = "Bloqueado"
 STATUS_JA_INATIVO = "Já estava inativo"
 STATUS_JA_BLOQUEADO = "Já estava bloqueado"
 STATUS_SEM_ACESSO = "Não possui acesso"
-
-# =============================================================================
-# CONFIGURAÇÃO DOS SISTEMAS RPA
-# =============================================================================
 
 SISTEMAS_CONFIG = {
     'crm_jmj': {
@@ -106,7 +86,7 @@ SISTEMAS_CONFIG = {
         'nome': 'SSO Email Unimed'
     },
     'nextqs': {
-        'ativo': True,
+        'ativo': False,
         'script': 'rpa_nextqs.py',
         'timeout': 300,
         'nome': 'NextQS Manager'
@@ -116,12 +96,14 @@ SISTEMAS_CONFIG = {
         'script': 'rpa_bplus.py',
         'timeout': 300,
         'nome': 'B+ Reembolso'
+    },
+    'tasy': {
+        'ativo': True,
+        'script': 'rpa_tasy.py',
+        'timeout': 300,
+        'nome': 'Tasy EMR'
     }
 }
-
-# =============================================================================
-# INICIALIZAÇÃO DO FLASK
-# =============================================================================
 
 app = Flask(__name__)
 
@@ -133,9 +115,6 @@ CORS(app, resources={
     }
 })
 
-# =============================================================================
-# FUNÇÕES UTILITÁRIAS
-# =============================================================================
 
 def limpar_cpf(cpf):
     """Remove formatação do CPF, deixando apenas números."""
@@ -170,11 +149,8 @@ def obter_status_formatado(sistema, usar_bloqueado=False):
     
     return STATUS_NAO_EXECUTADO
 
-# =============================================================================
-# FUNÇÕES DE RPA
-# =============================================================================
 
-def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None):
+def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_completo=None):
     """Executa o script RPA de um sistema específico."""
     config = SISTEMAS_CONFIG.get(sistema_id)
     
@@ -189,10 +165,13 @@ def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None):
     timeout = config['timeout']
     nome = config['nome']
     
-    # GIU usa CPF, outros sistemas usam email
     if sistema_id == 'giu' and cpf_usuario:
         parametro = cpf_usuario
         logger.info(f"[RPA] Executando {nome} para CPF: {cpf_usuario}")
+    elif sistema_id == 'tasy' and nome_completo:
+        nome_conta = email_usuario.split('@')[0] if email_usuario else ''
+        parametro = f'"{nome_completo}" {nome_conta}'
+        logger.info(f"[RPA] Executando {nome} para: {nome_completo} ({nome_conta})")
     else:
         parametro = email_usuario
         logger.info(f"[RPA] Executando {nome} para email: {email_usuario}")
@@ -236,7 +215,6 @@ def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None):
 
 def _interpretar_resultado_rpa(process, nome):
     """Interpreta o código de retorno do RPA."""
-    # Códigos: 0 = sucesso, 1 = erro, 2 = já inativo, 3 = não encontrado
     codigo = process.returncode
     
     if codigo == 0:
@@ -260,9 +238,6 @@ def _interpretar_resultado_rpa(process, nome):
             'log': process.stdout
         }
 
-# =============================================================================
-# FUNÇÕES DO ACTIVE DIRECTORY
-# =============================================================================
 
 def _criar_conexao_ad():
     """Cria e retorna uma conexão com o Active Directory."""
@@ -338,7 +313,6 @@ def consultar_email_por_cpf(cpf):
         
         usuario = conn.entries[0]
         
-        # Prioridade: mail > userPrincipalName > sAMAccountName@dominio
         if usuario.mail and usuario.mail.value:
             email = str(usuario.mail.value)
         elif usuario.userPrincipalName and usuario.userPrincipalName.value:
@@ -352,9 +326,6 @@ def consultar_email_por_cpf(cpf):
     finally:
         conn.unbind()
 
-# =============================================================================
-# FUNÇÕES DE EMAIL
-# =============================================================================
 
 def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas=None):
     """Envia email de notificação sobre a desativação do colaborador."""
@@ -366,25 +337,20 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
     
     logger.info("[OK] [EMAIL] Conexão SMTP estabelecida")
     
-    # Preparar dados
     cpf_correto = resultado_ad.get('cpf') or dados_colaborador.get('documentos', {}).get('cpf', 'N/A')
     cpf_formatado = formatar_cpf(cpf_correto)
     
-    # Status dos sistemas
     status_sistemas = _obter_status_sistemas(resultado_ad, resultado_sistemas)
     
-    # Dados do colaborador
     nome_colaborador = dados_colaborador.get('nome', 'N/A')
     setor = dados_colaborador.get('departamento', {}).get('nome', 'N/A')
     cargo = dados_colaborador.get('cargo', {}).get('nome', 'N/A')
     
-    # Gerar HTML
     html_content = _gerar_html_email(
         nome_colaborador, cpf_formatado, dados_colaborador,
         setor, cargo, status_sistemas, resultado_ad
     )
     
-    # Enviar
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f"NOTIFICAÇÃO: Colaborador Demitido - {nome_colaborador}"
     msg['From'] = EMAIL_CONFIG['username']
@@ -409,7 +375,8 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
         'giu': STATUS_NAO_EXECUTADO,
         'ged': STATUS_NAO_EXECUTADO,
         'nextqs': STATUS_NAO_EXECUTADO,
-        'bplus': STATUS_NAO_EXECUTADO
+        'bplus': STATUS_NAO_EXECUTADO,
+        'tasy': STATUS_NAO_EXECUTADO
     }
     
     if not resultado_sistemas or not resultado_sistemas.get('detalhes'):
@@ -430,6 +397,8 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['nextqs'] = obter_status_formatado(sistema)
         elif 'BPLUS' in nome or 'B+' in nome or 'REEMBOLSO' in nome:
             status['bplus'] = obter_status_formatado(sistema)
+        elif 'TASY' in nome:
+            status['tasy'] = obter_status_formatado(sistema)
     
     return status
 
@@ -477,8 +446,8 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
                     <tr><td>SAW:</td><td>{status['saw']}</td></tr>
                     <tr><td>GIU Unimed:</td><td>{status['giu']}</td></tr>
                     <tr><td>GED (Bye Bye Paper):</td><td>{status['ged']}</td></tr>
-                    <tr><td>NextQS Manager:</td><td>{status['nextqs']}</td></tr>
                     <tr><td>B+ Reembolso:</td><td>{status['bplus']}</td></tr>
+                    <tr><td>Tasy EMR:</td><td>{status['tasy']}</td></tr>
                 </table>
             </div>
             
@@ -494,11 +463,8 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
             
             <h3>Ações Recomendadas</h3>
             <ul>
-                <li>Usuário foi automaticamente desativado no Active Directory</li>
-                <li>Verificar acesso a sistemas integrados</li>
+                <li>Verificar acesso a demais sistemas não inseridos no fluxo</li>
                 <li>Confirmar desativação do email corporativo</li>
-                <li>Revogar acessos VPN e sistemas externos</li>
-                <li>Recolher equipamentos corporativos</li>
             </ul>
             
             <div class="footer">
@@ -510,27 +476,23 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
     </html>
     """
 
-# =============================================================================
-# PROCESSAMENTO ASSÍNCRONO
-# =============================================================================
 
 def processar_demissao_async(dados, cpf):
     """Processa a demissão em background (thread separada)."""
     try:
-        # PASSO 1: Desativar no AD
         logger.info("🏢 PASSO 1: Desativando usuário no Active Directory...")
         resultado_ad = desativar_usuario_por_cpf(cpf)
         logger.info(f"[OK] Usuário desativado no AD: {resultado_ad}")
         
-        # Obter email do usuário
         email_usuario = _obter_email_usuario(resultado_ad, dados, cpf)
         logger.info(f"[EMAIL] Email capturado: {email_usuario}")
         
-        # PASSO 2: Desativar nos sistemas externos
-        logger.info("[RPA] PASSO 2: Desativando usuário nos sistemas externos...")
-        resultado_sistemas = _executar_rpas(email_usuario, cpf)
+        nome_completo = dados.get('nome', '')
+        logger.info(f"[NOME] Nome completo: {nome_completo}")
         
-        # PASSO 3: Enviar notificação
+        logger.info("[RPA] PASSO 2: Desativando usuário nos sistemas externos...")
+        resultado_sistemas = _executar_rpas(email_usuario, cpf, nome_completo)
+        
         logger.info("[EMAIL] PASSO 3: Enviando email de notificação...")
         try:
             enviar_email_notificacao(dados, resultado_ad, resultado_sistemas)
@@ -560,7 +522,7 @@ def _obter_email_usuario(resultado_ad, dados, cpf):
     return email
 
 
-def _executar_rpas(email_usuario, cpf):
+def _executar_rpas(email_usuario, cpf, nome_completo=None):
     """Executa todos os RPAs ativos e retorna o resultado consolidado."""
     resultado = {
         'total_sistemas': 0,
@@ -577,7 +539,7 @@ def _executar_rpas(email_usuario, cpf):
         resultado['total_sistemas'] += 1
         logger.info(f"[PROC] Processando {config['nome']}...")
         
-        resultado_rpa = executar_sistema_rpa(sistema_id, email_usuario, cpf)
+        resultado_rpa = executar_sistema_rpa(sistema_id, email_usuario, cpf, nome_completo)
         resultado['detalhes'].append(resultado_rpa)
         
         if resultado_rpa['status'] == 'sucesso':
@@ -585,7 +547,6 @@ def _executar_rpas(email_usuario, cpf):
         elif resultado_rpa['status'] == 'erro':
             resultado['erros'] += 1
     
-    # Determinar status geral
     if resultado['erros'] > 0 and resultado['sucessos'] > 0:
         resultado['status_geral'] = 'parcial'
     elif resultado['erros'] > 0 and resultado['sucessos'] == 0:
@@ -593,9 +554,6 @@ def _executar_rpas(email_usuario, cpf):
     
     return resultado
 
-# =============================================================================
-# ROTAS / ENDPOINTS
-# =============================================================================
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -710,7 +668,6 @@ def webhook_solides():
     try:
         logger.info("[WEBHOOK] Webhook recebido do Solides")
         
-        # Validar secret
         secret_recebido = request.headers.get('X-Webhook-Secret')
         if WEBHOOK_SECRET and secret_recebido != WEBHOOK_SECRET:
             logger.warning("[AVISO] Webhook rejeitado - Secret inválido")
@@ -722,12 +679,10 @@ def webhook_solides():
         acao = data.get('acao')
         dados = data.get('dados', {})
         
-        # Ignorar ações que não são demissão
         if acao != 'demissao_colaborador':
             logger.info(f"Ação '{acao}' ignorada")
             return jsonify({'status': 'ignorado', 'acao_recebida': acao})
         
-        # Validar CPF
         cpf_bruto = dados.get('documentos', {}).get('cpf')
         if not cpf_bruto:
             return jsonify({'status': 'erro', 'motivo': 'CPF não encontrado'}), 400
@@ -736,7 +691,6 @@ def webhook_solides():
         if not cpf or len(cpf) != 11:
             return jsonify({'status': 'erro', 'motivo': 'CPF inválido'}), 400
         
-        # Verificar duplicatas
         if _cpf_ja_processado(cpf):
             return jsonify({
                 'status': 'ignorado',
@@ -744,12 +698,10 @@ def webhook_solides():
                 'cpf': cpf
             })
         
-        # Registrar processamento
         cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}
         
         logger.info(f"🚨 DEMISSÃO DETECTADA! CPF: {cpf} - {dados.get('nome')}")
         
-        # Processar em background
         thread = threading.Thread(target=processar_demissao_async, args=(dados, cpf))
         thread.daemon = True
         thread.start()
@@ -780,9 +732,6 @@ def _cpf_ja_processado(cpf):
     
     return False
 
-# =============================================================================
-# INICIALIZAÇÃO
-# =============================================================================
 
 if __name__ == '__main__':
     PORT = 3000
