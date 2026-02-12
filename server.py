@@ -5,7 +5,7 @@ Este servidor recebe webhooks do Solides quando um colaborador é demitido
 e automatiza a desativação em todos os sistemas corporativos.
 
 Autor: Marcos Vinicius Viana Lima
-Versão: 2.4
+Versão: 2.6
 """
 
 import json
@@ -18,6 +18,7 @@ import threading
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -26,8 +27,48 @@ from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+# Configuração de logs
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Formato do log
+log_format = logging.Formatter(
+    '%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Handler para arquivo (com rotação: 5MB por arquivo, mantém 10 arquivos)
+file_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, 'integracao_solides.log'),
+    maxBytes=5*1024*1024,  # 5MB
+    backupCount=10,
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(log_format)
+
+# Handler para console
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(log_format)
+
+# Configurar logger principal
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# Logger específico para webhooks (arquivo separado)
+webhook_logger = logging.getLogger('webhook')
+webhook_logger.setLevel(logging.INFO)
+webhook_file_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, 'webhooks.log'),
+    maxBytes=5*1024*1024,  # 5MB
+    backupCount=10,
+    encoding='utf-8'
+)
+webhook_file_handler.setFormatter(log_format)
+webhook_logger.addHandler(webhook_file_handler)
 
 AD_URL = os.getenv('AD_URL')
 AD_USER = os.getenv('AD_USER')
@@ -376,8 +417,17 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
 
 def _obter_status_sistemas(resultado_ad, resultado_sistemas):
     """Extrai o status de cada sistema do resultado."""
+    # Determinar status do AD
+    status_ad = resultado_ad.get('status')
+    if status_ad == 'desativado':
+        ad_texto = STATUS_DESATIVADO
+    elif status_ad == 'nao_encontrado':
+        ad_texto = "Não encontrado no AD"
+    else:
+        ad_texto = "Erro ao Desativar"
+    
     status = {
-        'ad': STATUS_DESATIVADO if resultado_ad.get('status') == 'desativado' else "Erro ao Desativar",
+        'ad': ad_texto,
         'jmj': STATUS_NAO_EXECUTADO,
         'saw': STATUS_NAO_EXECUTADO,
         'giu': STATUS_NAO_EXECUTADO,
@@ -387,9 +437,10 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
         'tasy': STATUS_NAO_EXECUTADO
     }
     
-    if not resultado_sistemas or not resultado_sistemas.get('detalhes'):
+    if not resultado_sistemas:
         return status
     
+    # Processar sistemas executados
     for sistema in resultado_sistemas.get('detalhes', []):
         nome = sistema.get('sistema', '').upper()
         
@@ -407,6 +458,21 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['bplus'] = obter_status_formatado(sistema)
         elif 'TASY' in nome:
             status['tasy'] = obter_status_formatado(sistema)
+    
+    # Processar sistemas pulados (quando usuário não encontrado no AD)
+    for sistema in resultado_sistemas.get('sistemas_pulados', []):
+        nome = sistema.get('sistema', '').upper()
+        
+        if 'JMJ' in nome or 'CRM' in nome:
+            status['jmj'] = STATUS_NAO_EXECUTADO
+        elif 'SAW' in nome:
+            status['saw'] = STATUS_NAO_EXECUTADO
+        elif 'GED' in nome or 'BYE' in nome:
+            status['ged'] = STATUS_NAO_EXECUTADO
+        elif 'BPLUS' in nome or 'B+' in nome or 'REEMBOLSO' in nome:
+            status['bplus'] = STATUS_NAO_EXECUTADO
+        elif 'TASY' in nome:
+            status['tasy'] = STATUS_NAO_EXECUTADO
     
     return status
 
@@ -485,160 +551,6 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
     """
 
 
-def enviar_email_notificacao_parcial(dados_colaborador, cpf, resultado_sistemas=None):
-    """Envia email de notificação quando usuário NÃO foi encontrado no AD."""
-    logger.info("[EMAIL] Iniciando envio de notificação PARCIAL (usuário não encontrado no AD)...")
-    
-    server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
-    server.starttls()
-    server.login(EMAIL_CONFIG['username'], EMAIL_CONFIG['password'])
-    
-    logger.info("[OK] [EMAIL] Conexão SMTP estabelecida")
-    
-    cpf_bruto = dados_colaborador.get('documentos', {}).get('cpf', cpf)
-    cpf_formatado = formatar_cpf(cpf_bruto)
-    
-    nome_colaborador = dados_colaborador.get('nome', 'N/A')
-    setor = dados_colaborador.get('departamento', {}).get('nome', 'N/A')
-    cargo = dados_colaborador.get('cargo', {}).get('nome', 'N/A')
-    
-    html_content = _gerar_html_email_parcial(
-        nome_colaborador, cpf_formatado, dados_colaborador,
-        setor, cargo, resultado_sistemas
-    )
-    
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"⚠️ ATENÇÃO: Inativação Parcial - {nome_colaborador} (Usuário não encontrado no AD)"
-    msg['From'] = EMAIL_CONFIG['username']
-    msg['To'] = ', '.join(TI_EMAILS)
-    
-    msg.attach(MIMEText(html_content, 'html', 'utf-8'))
-    server.send_message(msg)
-    server.quit()
-    
-    logger.info("[OK] [EMAIL] Email de notificação parcial enviado com sucesso!")
-    logger.info(f"[EMAIL] Destinatários: {', '.join(TI_EMAILS)}")
-    
-    return {'status': 'success', 'recipients': TI_EMAILS}
-
-
-def _gerar_html_email_parcial(nome, cpf, dados, setor, cargo, resultado_sistemas):
-    """Gera o HTML do email de notificação parcial (usuário não encontrado no AD)."""
-    
-    # Monta lista de sistemas executados
-    sistemas_executados_html = ""
-    if resultado_sistemas and resultado_sistemas.get('detalhes'):
-        for sistema in resultado_sistemas['detalhes']:
-            status = obter_status_formatado(sistema)
-            sistemas_executados_html += f"<tr><td>{sistema.get('sistema', 'N/A')}:</td><td>{status}</td></tr>"
-    else:
-        sistemas_executados_html = "<tr><td colspan='2'>Nenhum sistema executado</td></tr>"
-    
-    # Monta lista de sistemas NÃO executados (pulados)
-    sistemas_pulados_html = ""
-    if resultado_sistemas and resultado_sistemas.get('sistemas_pulados'):
-        for sistema in resultado_sistemas['sistemas_pulados']:
-            sistemas_pulados_html += f"<tr><td>{sistema.get('sistema', 'N/A')}:</td><td>Não executado - Requer AD</td></tr>"
-    
-    # Lista de sistemas que precisam de inativação manual
-    sistemas_manuais = [
-        'Active Directory (AD)',
-        'CRM JMJ',
-        'SAW',
-        'GED (Bye Bye Paper)',
-        'B+ Reembolso',
-        'Tasy EMR',
-        'Email Corporativo'
-    ]
-    sistemas_manuais_html = "".join([f"<li>{s}</li>" for s in sistemas_manuais])
-    
-    return f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            h2 {{ color: #e74c3c; border-bottom: 2px solid #e74c3c; padding-bottom: 10px; }}
-            h3 {{ color: #2c3e50; margin-top: 25px; }}
-            .info-box {{ background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; }}
-            .warning-box {{ background-color: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #ffc107; }}
-            .error-box {{ background-color: #f8d7da; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #dc3545; }}
-            .success-box {{ background-color: #d4edda; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #28a745; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
-            td {{ padding: 8px 12px; border-bottom: 1px solid #ddd; }}
-            td:first-child {{ font-weight: bold; width: 40%; background-color: #f8f9fa; }}
-            .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }}
-            ul {{ margin: 10px 0; padding-left: 20px; }}
-            li {{ margin: 5px 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>⚠️ ATENÇÃO: Inativação Parcial Realizada</h2>
-            
-            <div class="error-box">
-                <strong>🚨 USUÁRIO NÃO ENCONTRADO NO ACTIVE DIRECTORY</strong>
-                <p>O colaborador com CPF <strong>{cpf}</strong> não foi localizado no Active Directory. 
-                Apenas os sistemas que utilizam <strong>somente o CPF</strong> foram processados.</p>
-                <p><strong>É necessária intervenção manual para inativar os demais sistemas.</strong></p>
-            </div>
-            
-            <h3>Informações do Colaborador</h3>
-            <div class="info-box">
-                <table>
-                    <tr><td>Nome:</td><td>{nome}</td></tr>
-                    <tr><td>CPF:</td><td>{cpf}</td></tr>
-                    <tr><td>Email (Solides):</td><td>{dados.get('email', 'N/A')}</td></tr>
-                    <tr><td>Setor:</td><td>{setor}</td></tr>
-                    <tr><td>Cargo:</td><td>{cargo}</td></tr>
-                    <tr><td>Matrícula:</td><td>{dados.get('matricula', 'N/A')}</td></tr>
-                    <tr><td>Data Demissão:</td><td>{dados.get('data_demissao', 'N/A')}</td></tr>
-                </table>
-            </div>
-            
-            <h3>✅ Sistemas Processados (Somente CPF)</h3>
-            <div class="success-box">
-                <table>
-                    {sistemas_executados_html}
-                </table>
-            </div>
-            
-            <h3>❌ Sistemas NÃO Processados (Requerem AD)</h3>
-            <div class="warning-box">
-                <table>
-                    {sistemas_pulados_html}
-                </table>
-            </div>
-            
-            <h3>📋 Ações Manuais Necessárias</h3>
-            <div class="error-box">
-                <p><strong>Gentileza verificar os logs e prosseguir com a inativação MANUAL dos seguintes sistemas:</strong></p>
-                <ul>
-                    {sistemas_manuais_html}
-                </ul>
-                <p><em>Verifique também se o CPF/EmployeeID do colaborador está cadastrado corretamente no Active Directory.</em></p>
-            </div>
-            
-            <h3>🔍 Possíveis Causas</h3>
-            <div class="info-box">
-                <ul>
-                    <li>CPF não cadastrado no campo EmployeeID do Active Directory</li>
-                    <li>Colaborador terceirizado sem conta no AD</li>
-                    <li>Colaborador novo que ainda não teve conta criada no AD</li>
-                    <li>CPF cadastrado com formatação diferente no AD</li>
-                </ul>
-            </div>
-            
-            <div class="footer">
-                <p><em>Esta é uma notificação automática do sistema de integração Solides + Active Directory.</em></p>
-                <p><em>Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M:%S')}</em></p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-
 def processar_demissao_async(dados, cpf):
     """Processa a demissão em background (thread separada)."""
     try:
@@ -685,17 +597,37 @@ def processar_demissao_async(dados, cpf):
             logger.info("[RPA] PASSO 2: Executando APENAS sistemas que usam somente CPF...")
             resultado_sistemas = _executar_rpas_somente_cpf(cpf, nome_completo)
             
-            logger.info("[EMAIL] PASSO 3: Enviando email de notificação PARCIAL...")
+            # Monta resultado_ad com status de não encontrado para o email
+            resultado_ad = {
+                'cpf': cpf,
+                'login': 'Não encontrado',
+                'nome': nome_completo or dados.get('nome', 'N/A'),
+                'employeeID': cpf,
+                'status': 'nao_encontrado'
+            }
+            
+            logger.info("[EMAIL] PASSO 3: Enviando email de notificação...")
             try:
-                enviar_email_notificacao_parcial(dados, cpf, resultado_sistemas)
-                logger.info("[OK] Email de notificação parcial enviado com sucesso!")
+                enviar_email_notificacao(dados, resultado_ad, resultado_sistemas)
+                logger.info("[OK] Email de notificação enviado com sucesso!")
             except Exception as email_error:
-                logger.error(f"[ERRO] ERRO ao enviar email parcial: {str(email_error)}")
+                logger.error(f"[ERRO] ERRO ao enviar email: {str(email_error)}")
         
         logger.info(f"[OK] Processamento completo para CPF: {cpf}")
         
+        # Log do resultado no arquivo de webhooks
+        webhook_logger.info("=" * 80)
+        webhook_logger.info(f"PROCESSAMENTO CONCLUÍDO - CPF: {cpf}")
+        webhook_logger.info(f"Colaborador: {dados.get('nome', 'N/A')}")
+        webhook_logger.info(f"AD: {resultado_ad.get('status', 'N/A')}")
+        webhook_logger.info(f"Sistemas processados: {resultado_sistemas.get('total_sistemas', 0)}")
+        webhook_logger.info(f"Sucessos: {resultado_sistemas.get('sucessos', 0)}")
+        webhook_logger.info(f"Erros: {resultado_sistemas.get('erros', 0)}")
+        webhook_logger.info("=" * 80)
+        
     except Exception as e:
         logger.error(f"[ERRO] Erro no processamento async: {str(e)}")
+        webhook_logger.error(f"ERRO NO PROCESSAMENTO - CPF: {cpf} - {str(e)}")
     finally:
         if cpf in cpfs_processados:
             cpfs_processados[cpf]['processando'] = False
@@ -796,7 +728,7 @@ def status():
     return jsonify({
         'status': 'online',
         'servico': 'Integração Solides - AD + Sistemas',
-        'versao': '2.4',
+        'versao': '2.6',
         'timestamp': datetime.now().isoformat(),
         'endpoints': {
             '/webhook/solides': 'POST - Webhook principal',
@@ -901,14 +833,22 @@ def _obter_employee_id(usuario):
 def webhook_solides():
     """Recebe e processa webhooks de demissão do Solides."""
     try:
+        # Log do webhook recebido (arquivo separado)
+        webhook_logger.info("=" * 80)
+        webhook_logger.info(f"WEBHOOK RECEBIDO - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        webhook_logger.info(f"IP Origem: {request.remote_addr}")
+        webhook_logger.info(f"Headers: {dict(request.headers)}")
+        
         logger.info("[WEBHOOK] Webhook recebido do Solides")
         
         secret_recebido = request.headers.get('X-Webhook-Secret')
         if WEBHOOK_SECRET and secret_recebido != WEBHOOK_SECRET:
             logger.warning("[AVISO] Webhook rejeitado - Secret inválido")
+            webhook_logger.warning("REJEITADO: Secret inválido")
             return jsonify({'status': 'erro', 'motivo': 'Secret inválido'}), 401
         
         data = request.get_json()
+        webhook_logger.info(f"Payload: {json.dumps(data, indent=2, ensure_ascii=False)}")
         logger.info(f"Body: {json.dumps(data, indent=2)}")
         
         acao = data.get('acao')
@@ -935,6 +875,16 @@ def webhook_solides():
         
         cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}
         
+        # Log detalhado do webhook aceito
+        webhook_logger.info("-" * 40)
+        webhook_logger.info("STATUS: ACEITO - Processamento iniciado")
+        webhook_logger.info(f"Colaborador: {dados.get('nome')}")
+        webhook_logger.info(f"CPF: {cpf}")
+        webhook_logger.info(f"Email: {dados.get('email', 'N/A')}")
+        webhook_logger.info(f"Setor: {dados.get('departamento', {}).get('nome', 'N/A')}")
+        webhook_logger.info(f"Cargo: {dados.get('cargo', {}).get('nome', 'N/A')}")
+        webhook_logger.info("=" * 80)
+        
         logger.info(f"🚨 DEMISSÃO DETECTADA! CPF: {cpf} - {dados.get('nome')}")
         
         thread = threading.Thread(target=processar_demissao_async, args=(dados, cpf))
@@ -950,6 +900,7 @@ def webhook_solides():
         
     except Exception as error:
         logger.error(f"[ERRO] Erro no webhook: {str(error)}")
+        webhook_logger.error(f"ERRO NO WEBHOOK: {str(error)}")
         return jsonify({'status': 'erro', 'erro': str(error)}), 500
 
 

@@ -8,7 +8,10 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 - ✅ Desativa no **GIU Unimed**
 - ✅ Bloqueia no **GED Bye Bye Paper**
 - ✅ Desativa no **B+ Reembolso**
+- ✅ Desativa no **Tasy EMR**
 - ✅ Envia **email de notificação** para o TI
+- ✅ **Inativação parcial** quando usuário não encontrado no AD
+- ✅ **Logs automáticos** com rotação
 
 > Observação: **NextQS Manager está desativado no processo atualmente** (não é executado).
 
@@ -145,6 +148,7 @@ ngrok http 3000
 
 ```
 ├── server.py              # Servidor Flask principal
+├── inativar_manual.py     # Script para inativação manual (contingência)
 ├── rpa_crm.py             # RPA - CRM JMJ (email)
 ├── rpa_saw.py             # RPA - SAW (email)
 ├── rpa_giu.py             # RPA - GIU Unimed (CPF)
@@ -153,8 +157,12 @@ ngrok http 3000
 ├── rpa_bplus.py           # RPA - B+ Reembolso (nome de conta)
 ├── rpa_tasy.py            # RPA - Tasy EMR (nome completo + nome de conta)
 ├── inspecionar_pagina.py  # Ferramenta para mapear novos sites
+├── logs/                  # Pasta de logs (criada automaticamente)
+│   ├── integracao_solides.log  # Log geral
+│   └── webhooks.log            # Log de webhooks
 ├── env.example            # Template de variáveis
 ├── requirements.txt       # Dependências Python
+├── POP_INTEGRACAO_SOLIDES.md  # Procedimento Operacional Padrão
 └── README.md              # Documentação
 ```
 
@@ -210,6 +218,66 @@ Ações Recomendadas
 
 O sistema bloqueia o mesmo CPF por **5 minutos** para evitar processamento duplicado.
 
+## Inativação Parcial (Usuário não encontrado no AD)
+
+Quando o usuário não é encontrado no Active Directory, o sistema:
+
+1. Continua a inativação nos sistemas que usam **somente CPF** (ex: GIU)
+2. Pula os sistemas que precisam de dados do AD (email, nome)
+3. Envia email de notificação normalmente (com status "Não encontrado no AD")
+
+## Inativação Manual (Contingência)
+
+Quando o fluxo automático falhar, use o script de inativação manual:
+
+```bash
+# Inativar em todos os sistemas + enviar email
+python inativar_manual.py --cpf 01234567890 --email joao.silva@empresa.com.br --nome "JOAO DA SILVA" --enviar-email
+
+# Pular o AD (quando usuário não existe no AD)
+python inativar_manual.py --cpf 01234567890 --email joao.silva@empresa.com.br --nome "JOAO DA SILVA" --pular-ad --enviar-email
+
+# Apenas sistemas específicos
+python inativar_manual.py --cpf 01234567890 --sistemas giu
+python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw ged
+```
+
+### Parâmetros disponíveis
+
+| Parâmetro | Descrição |
+|-----------|-----------|
+| `--cpf` | CPF do colaborador (usado no AD e GIU) |
+| `--email` | Email corporativo (usado nos demais sistemas) |
+| `--nome` | Nome completo (necessário para Tasy) |
+| `--sistemas` | Lista de sistemas: `ad`, `crm`, `saw`, `giu`, `ged`, `bplus`, `tasy` |
+| `--pular-ad` | Não tentar desativar no Active Directory |
+| `--enviar-email` | Enviar email de notificação para o TI |
+
+## Logs
+
+Os logs são salvos automaticamente na pasta `logs/` com rotação:
+
+| Arquivo | Conteúdo |
+|---------|----------|
+| `integracao_solides.log` | Log geral de todas as operações |
+| `webhooks.log` | Log detalhado dos webhooks recebidos |
+
+**Características:**
+- Rotação automática: 5MB por arquivo, mantém 10 backups
+- Formato: `2026-02-04 14:30:25 | INFO | [WEBHOOK] Mensagem...`
+
+**Consultar logs (PowerShell):**
+```powershell
+# Últimas 50 linhas
+Get-Content logs\integracao_solides.log -Tail 50
+
+# Buscar por CPF
+Select-String -Path logs\*.log -Pattern "12345678900"
+
+# Buscar erros
+Select-String -Path logs\integracao_solides.log -Pattern "ERROR"
+```
+
 ## Criando RPA para Novos Sites
 
 Use o script de inspeção para mapear elementos de novos sistemas:
@@ -223,4 +291,8 @@ O gravador captura cliques e digitação, gerando o código automaticamente.
 ---
 
 **Desenvolvido por:** Marcos Vinicius Viana Lima  
-**Versão:** 2.3
+**Versão:** 2.6
+
+## Documentação Completa
+
+Para procedimentos detalhados, consulte o **POP (Procedimento Operacional Padrão)**: `POP_INTEGRACAO_SOLIDES.md`
