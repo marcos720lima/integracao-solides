@@ -931,4 +931,4 @@ if __name__ == '__main__':
     print(f"📊 Status:   http://localhost:{PORT}/status")
     print("=" * 60)
     
-    app.run(host='0.0.0.0', port=PORT, debug=True)
+    app.run(host='0.0.0.0', port=PORT, debug=True, use_reloader=False)
