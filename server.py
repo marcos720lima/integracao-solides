@@ -14,6 +14,7 @@ import os
 import re
 import smtplib
 import subprocess
+import sys
 import threading
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -214,16 +215,21 @@ def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_compl
     timeout = config['timeout']
     nome = config['nome']
     
+    cmd_args = [sys.executable, script]
+
     if sistema_id == 'giu' and cpf_usuario:
-        parametro = cpf_usuario
+        parametro = str(cpf_usuario)
         logger.info(f"[RPA] Executando {nome} para CPF: {cpf_usuario}")
+        cmd_args.append(parametro)
     elif sistema_id == 'tasy' and nome_completo:
         nome_conta = email_usuario.split('@')[0] if email_usuario else ''
-        parametro = f'"{nome_completo}" {nome_conta}'
+        parametro = str(nome_completo)
         logger.info(f"[RPA] Executando {nome} para: {nome_completo} ({nome_conta})")
+        cmd_args.extend([parametro, nome_conta])
     else:
-        parametro = email_usuario
+        parametro = str(email_usuario or '')
         logger.info(f"[RPA] Executando {nome} para email: {email_usuario}")
+        cmd_args.append(parametro)
     
     if not os.path.exists(script):
         logger.error(f"[ERRO] Script {script} não encontrado")
@@ -234,14 +240,15 @@ def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_compl
         }
     
     try:
-        cmd = f'python {script} "{parametro}"'
+        logger.info(f"[RPA] Comando: {' '.join(cmd_args)}")
         process = subprocess.run(
-            cmd,
+            cmd_args,
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=os.getcwd(),
-            shell=True
+            shell=False,
+            stdin=subprocess.DEVNULL
         )
         
         return _interpretar_resultado_rpa(process, nome)
