@@ -1,4 +1,4 @@
-"""RPA SAW - Desativa usuarios no SAW"""
+"""RPA SAW - Ativa/Desativa usuarios no SAW"""
 
 import sys
 import time
@@ -18,7 +18,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 
-def executar_saw_automatico(email_usuario):
+def executar_saw_automatico(email_usuario, acao='bloquear'):
+    if acao not in ('bloquear', 'desbloquear'):
+        return ERRO
+
     with sync_playwright() as p:
         browser = None
         try:
@@ -51,19 +54,30 @@ def executar_saw_automatico(email_usuario):
                 
                 if icone_desativar.count() == 0 and icone_ativar.count() == 0:
                     return NAO_ENCONTRADO
-                
-                if icone_desativar.count() == 0 and icone_ativar.count() > 0:
+
+                if acao == 'bloquear' and icone_desativar.count() == 0 and icone_ativar.count() > 0:
+                    return JA_INATIVO
+                if acao == 'desbloquear' and icone_ativar.count() == 0 and icone_desativar.count() > 0:
                     return JA_INATIVO
                 
                 page.evaluate("window.confirm = () => true;")
                 
                 try:
-                    icone_desativar.first.click()
+                    if acao == 'bloquear':
+                        icone_desativar.first.click()
+                    else:
+                        icone_ativar.first.click()
                 except:
                     try:
-                        page.click("img[src*='desativarUsuario']")
+                        if acao == 'bloquear':
+                            page.click("img[src*='desativarUsuario']")
+                        else:
+                            page.click("img[src*='ativarUsuario']")
                     except:
-                        page.click("img[title*='Desativar'], img[alt*='Desativar']")
+                        if acao == 'bloquear':
+                            page.click("img[title*='Desativar'], img[alt*='Desativar']")
+                        else:
+                            page.click("img[title*='Ativar'], img[alt*='Ativar']")
                 
                 time.sleep(3)
                 
@@ -77,12 +91,17 @@ def executar_saw_automatico(email_usuario):
                 icone_ativar_depois = page.locator("img[src*='ativarUsuario']")
                 icone_desativar_depois = page.locator("img[src*='desativarUsuario']")
                 
-                if icone_ativar_depois.count() > 0 and icone_desativar_depois.count() == 0:
-                    return SUCESSO
-                elif icone_desativar_depois.count() > 0:
-                    return ERRO
+                if acao == 'bloquear':
+                    if icone_ativar_depois.count() > 0 and icone_desativar_depois.count() == 0:
+                        return SUCESSO
+                    if icone_desativar_depois.count() > 0:
+                        return ERRO
                 else:
-                    return SUCESSO
+                    if icone_desativar_depois.count() > 0 and icone_ativar_depois.count() == 0:
+                        return SUCESSO
+                    if icone_ativar_depois.count() > 0:
+                        return ERRO
+                return SUCESSO
                 
             except Exception as e:
                 return ERRO
@@ -102,8 +121,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_saw.py <email_usuario>")
+        print("USO: python rpa_saw.py <email_usuario> [bloquear|desbloquear]")
         sys.exit(1)
-    
-    resultado = executar_saw_automatico(email)
+
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    resultado = executar_saw_automatico(email, acao)
     sys.exit(resultado)

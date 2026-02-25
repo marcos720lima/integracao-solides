@@ -387,7 +387,7 @@ Exemplos:
     if args.enviar_email:
         print(f"\n{'─'*50}")
         enviar_email_notificacao_manual(args.cpf, args.email, args.nome, resultados)
-    
+
     print(f"\n{'='*60}\n")
     
     if erros > 0:

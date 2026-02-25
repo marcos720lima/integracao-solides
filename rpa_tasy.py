@@ -1,4 +1,4 @@
-"""RPA Tasy EMR - Inativa usuarios no Tasy"""
+"""RPA Tasy EMR - Ativa/Inativa usuarios no Tasy"""
 
 import sys
 import time
@@ -18,7 +18,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 
-def executar_tasy_automatico(nome_completo, nome_conta):
+def executar_tasy_automatico(nome_completo, nome_conta, acao='bloquear'):
+    if acao not in ('bloquear', 'desbloquear'):
+        return ERRO
+
     if not TASY_USERNAME or not TASY_PASSWORD:
         return ERRO
     
@@ -142,13 +145,10 @@ def executar_tasy_automatico(nome_completo, nome_conta):
                     esta_ativo = True
                 elif radio_inativo.is_checked():
                     esta_ativo = False
-                    page.locator("span:has-text('Cancelar'), button:has-text('Cancelar')").first.click()
-                    time.sleep(2)
-                    return JA_INATIVO
             except Exception:
                 esta_ativo = True
             
-            if not esta_ativo:
+            if acao == 'bloquear' and not esta_ativo:
                 try:
                     inativo_selecionado = page.locator("label:has-text('Inativo').selected, input[type='radio']:checked + label:has-text('Inativo')").count()
                     if inativo_selecionado > 0:
@@ -157,15 +157,27 @@ def executar_tasy_automatico(nome_completo, nome_conta):
                         return JA_INATIVO
                 except Exception:
                     pass
+            if acao == 'desbloquear' and esta_ativo:
+                try:
+                    page.locator("span:has-text('Cancelar'), button:has-text('Cancelar')").first.click()
+                except Exception:
+                    pass
+                time.sleep(2)
+                return JA_INATIVO
             
             try:
-                label_inativo = page.locator("label:has-text('Inativo')").first
-                label_inativo.click()
+                if acao == 'bloquear':
+                    page.locator("label:has-text('Inativo')").first.click()
+                else:
+                    page.locator("label:has-text('Ativo')").first.click()
             except Exception:
                 try:
-                    radio_inativo.click()
+                    if acao == 'bloquear':
+                        radio_inativo.click()
+                    else:
+                        radio_ativo.click()
                 except Exception:
-                    page.click("text=Inativo")
+                    page.click("text=Inativo" if acao == 'bloquear' else "text=Ativo")
             
             time.sleep(1)
             
@@ -195,17 +207,24 @@ def executar_tasy_automatico(nome_completo, nome_conta):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) >= 3:
+    acao = 'bloquear'
+    if len(sys.argv) >= 4:
         nome_completo = sys.argv[1]
         nome_conta = sys.argv[2]
+        acao = sys.argv[3].lower()
+    elif len(sys.argv) == 3:
+        email = sys.argv[1]
+        nome_conta = email.split('@')[0]
+        nome_completo = nome_conta.replace('.', ' ').title()
+        acao = sys.argv[2].lower()
     elif len(sys.argv) == 2:
         email = sys.argv[1]
         nome_conta = email.split('@')[0]
         nome_completo = nome_conta.replace('.', ' ').title()
     else:
-        print("USO: python rpa_tasy.py <nome_completo> <nome_conta>")
-        print("  ou: python rpa_tasy.py <email>")
+        print("USO: python rpa_tasy.py <nome_completo> <nome_conta> [bloquear|desbloquear]")
+        print("  ou: python rpa_tasy.py <email> [bloquear|desbloquear]")
         sys.exit(1)
     
-    resultado = executar_tasy_automatico(nome_completo, nome_conta)
+    resultado = executar_tasy_automatico(nome_completo, nome_conta, acao)
     sys.exit(resultado)

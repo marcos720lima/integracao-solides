@@ -1,4 +1,4 @@
-"""RPA CRM JMJ - Desativa usuarios no CRM"""
+"""RPA CRM JMJ - Ativa/Desativa usuarios no CRM"""
 
 import sys
 import time
@@ -18,7 +18,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 
-def executar_crm_automatico(email_usuario):
+def executar_crm_automatico(email_usuario, acao='bloquear'):
+    if acao not in ('bloquear', 'desbloquear'):
+        return ERRO
+
     nome_usuario = email_usuario.split('@')[0].replace('.', ' ').lower()
     
     with sync_playwright() as p:
@@ -115,7 +118,10 @@ def executar_crm_automatico(email_usuario):
             try:
                 toggle = page.locator("jmj-toggle button, button[tabindex='-1']").first
                 toggle_class = toggle.get_attribute("class") or ""
-                if "off" in toggle_class.lower() or "inactive" in toggle_class.lower():
+                desligado = "off" in toggle_class.lower() or "inactive" in toggle_class.lower()
+                if acao == 'bloquear' and desligado:
+                    return JA_INATIVO
+                if acao == 'desbloquear' and not desligado:
                     return JA_INATIVO
             except:
                 pass
@@ -145,8 +151,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_crm.py <email_usuario>")
+        print("USO: python rpa_crm.py <email_usuario> [bloquear|desbloquear]")
         sys.exit(1)
-    
-    resultado = executar_crm_automatico(email)
+
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    resultado = executar_crm_automatico(email, acao)
     sys.exit(resultado)

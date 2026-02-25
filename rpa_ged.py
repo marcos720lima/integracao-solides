@@ -1,4 +1,4 @@
-"""RPA GED Bye Bye Paper - Bloqueia usuarios no GED"""
+"""RPA GED Bye Bye Paper - Bloqueia/Desbloqueia usuarios no GED"""
 
 import sys
 import time
@@ -19,7 +19,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 
-def executar_ged_automatico(email_usuario):
+def executar_ged_automatico(email_usuario, acao='bloquear'):
+    if acao not in ('bloquear', 'desbloquear'):
+        return ERRO
+
     nome_busca = email_usuario.split('@')[0].split('.')[0]
     
     with sync_playwright() as p:
@@ -117,13 +120,18 @@ def executar_ged_automatico(email_usuario):
             except:
                 pass
             
-            if status_atual and 'BLOQUEADO' in status_atual.upper():
-                return JA_INATIVO
+            if status_atual:
+                status_upper = status_atual.upper()
+                if acao == 'bloquear' and 'BLOQUEADO' in status_upper:
+                    return JA_INATIVO
+                if acao == 'desbloquear' and 'ATIVO' in status_upper:
+                    return JA_INATIVO
             
             page.click("button.btn.btn-yellow")
             time.sleep(2)
             
-            page.select_option("select[name='cp5']", "BLOQUEADO")
+            novo_status = "BLOQUEADO" if acao == 'bloquear' else "ATIVO"
+            page.select_option("select[name='cp5']", novo_status)
             time.sleep(1)
             
             page.click("button.btn.btn-success:has-text('Confirmar')")
@@ -142,8 +150,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_ged.py <email_usuario>")
+        print("USO: python rpa_ged.py <email_usuario> [bloquear|desbloquear]")
         sys.exit(1)
-    
-    resultado = executar_ged_automatico(email)
+
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    resultado = executar_ged_automatico(email, acao)
     sys.exit(resultado)

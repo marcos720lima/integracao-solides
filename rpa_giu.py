@@ -1,8 +1,9 @@
-"""RPA GIU Unimed - Desativa usuarios no GIU"""
+"""RPA GIU Unimed - Ativa/Desativa usuarios no GIU"""
 
 import sys
 import time
 import os
+import traceback
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
@@ -18,7 +19,21 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 
-def executar_giu_automatico(cpf_usuario):
+def _first_visible(page, selectors, timeout=8000):
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            locator.wait_for(state="visible", timeout=timeout)
+            return locator
+        except Exception:
+            continue
+    return None
+
+
+def executar_giu_automatico(cpf_usuario, acao='bloquear'):
+    if acao not in ('bloquear', 'desbloquear'):
+        return ERRO
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             channel="chrome",
@@ -28,68 +43,168 @@ def executar_giu_automatico(cpf_usuario):
         page = browser.new_page()
         
         try:
-            page.goto(f"{GIU_URL}/login", timeout=60000)
+            base_url = GIU_URL.rstrip("/")
+            page.goto(f"{base_url}/login", timeout=60000)
             page.wait_for_load_state("domcontentloaded")
             time.sleep(2)
-            
-            page.fill("input[placeholder='Insira o CPF ou CNPJ']", GIU_USERNAME)
+
+            campo_usuario = _first_visible(
+                page,
+                [
+                    "input[placeholder='Insira o CPF ou CNPJ']",
+                    "input[placeholder*='CPF']",
+                    "input[name*='cpf']",
+                    "input[type='text']",
+                ],
+            )
+            campo_senha = _first_visible(
+                page,
+                [
+                    "input[type='password'][placeholder='Insira a senha']",
+                    "input[placeholder*='senha']",
+                    "input[type='password']",
+                ],
+            )
+
+            if not campo_usuario or not campo_senha:
+                print("[GIU] Campos de login não encontrados.", file=sys.stderr)
+                return ERRO
+
+            campo_usuario.fill(GIU_USERNAME or "")
             time.sleep(0.5)
-            page.fill("input[type='password'][placeholder='Insira a senha']", GIU_PASSWORD)
+            campo_senha.fill(GIU_PASSWORD or "")
             time.sleep(0.5)
-            page.click("button.unicomp-botao.primario")
+
+            botao_login = _first_visible(
+                page,
+                [
+                    "button.unicomp-botao.primario",
+                    "button:has-text('Entrar')",
+                    "button[type='submit']",
+                ],
+                timeout=5000,
+            )
+            if not botao_login:
+                print("[GIU] Botão de login não encontrado.", file=sys.stderr)
+                return ERRO
+
+            botao_login.click()
             time.sleep(5)
-            
-            page.goto("https://giu.unimed.coop.br/gerenciarUsuarios", timeout=30000)
+
+            page.goto(f"{base_url}/gerenciarUsuarios", timeout=30000)
             page.wait_for_load_state("domcontentloaded")
             time.sleep(3)
-            
-            campo_busca = page.locator("input[placeholder*='Buscar Nome']")
+
+            campo_busca = _first_visible(
+                page,
+                [
+                    "input[placeholder*='Buscar Nome']",
+                    "input[placeholder*='Buscar']",
+                    "input[placeholder*='CPF']",
+                    "input[type='search']",
+                    "input[type='text']",
+                ],
+            )
+            if not campo_busca:
+                print("[GIU] Campo de busca não encontrado.", file=sys.stderr)
+                return ERRO
+
             campo_busca.fill(cpf_usuario)
             time.sleep(1)
-            page.click("button.fonte-secundaria.texto")
+
+            botao_buscar = _first_visible(
+                page,
+                [
+                    "button.fonte-secundaria.texto",
+                    "button:has-text('Buscar')",
+                    "button:has-text('Pesquisar')",
+                ],
+                timeout=3000,
+            )
+            if botao_buscar:
+                botao_buscar.click()
+            else:
+                campo_busca.press("Enter")
             time.sleep(3)
-            
+
             try:
-                icone_editar = page.locator("div.icone-acao.habilitado")
+                icone_editar = page.locator(
+                    "div.icone-acao.habilitado, [class*='icone-acao'][class*='habilitado'], button[aria-label*='Editar']"
+                )
                 if icone_editar.count() == 0:
                     return NAO_ENCONTRADO
             except Exception:
                 return NAO_ENCONTRADO
-            
-            page.click("div.icone-acao.habilitado")
+
+            icone_editar.first.click()
             time.sleep(3)
-            
+
             try:
-                status_texto = page.locator("span.fonte-secundaria.texto.label-campo").first
+                status_texto = page.locator(
+                    "span.fonte-secundaria.texto.label-campo, span:has-text('ATIVO'), span:has-text('INATIVO'), span:has-text('INATIVA')"
+                ).first
                 status_atual = status_texto.inner_text().strip().upper()
-                
-                if "INATIVA" in status_atual or "INATIVO" in status_atual:
+
+                inativo = "INATIVA" in status_atual or "INATIVO" in status_atual
+                if acao == 'bloquear' and inativo:
+                    return JA_INATIVO
+                if acao == 'desbloquear' and not inativo:
                     return JA_INATIVO
             except Exception:
                 pass
-            
+
             try:
-                page.click("span.slider.round")
+                toggle = _first_visible(
+                    page,
+                    ["span.slider.round", "label.switch", "input[type='checkbox']"],
+                    timeout=4000,
+                )
+                if not toggle:
+                    print("[GIU] Toggle de ativação não encontrado.", file=sys.stderr)
+                    return ERRO
+                toggle.click()
             except Exception:
-                try:
-                    page.click("label.switch")
-                except Exception:
-                    page.click("input[type='checkbox']")
-            
+                print("[GIU] Falha ao clicar no toggle de ativação.", file=sys.stderr)
+                return ERRO
+
             time.sleep(2)
-            
-            page.click("button.unicomp-botao.primario:has-text('SALVAR')")
+
+            botao_salvar = _first_visible(
+                page,
+                [
+                    "button.unicomp-botao.primario:has-text('SALVAR')",
+                    "button:has-text('Salvar')",
+                    "button:has-text('SALVAR')",
+                ],
+                timeout=5000,
+            )
+            if not botao_salvar:
+                print("[GIU] Botão SALVAR não encontrado.", file=sys.stderr)
+                return ERRO
+            botao_salvar.click()
             time.sleep(3)
-            
+
             try:
-                page.click("button.unicomp-botao.primario:has-text('FECHAR')", timeout=5000)
+                botao_fechar = _first_visible(
+                    page,
+                    [
+                        "button.unicomp-botao.primario:has-text('FECHAR')",
+                        "button:has-text('Fechar')",
+                        "button:has-text('FECHAR')",
+                    ],
+                    timeout=5000,
+                )
+                if botao_fechar:
+                    botao_fechar.click()
                 time.sleep(2)
             except Exception:
                 pass
-            
+
             return SUCESSO
-            
+
         except Exception as e:
+            print(f"[GIU] Erro inesperado: {e}", file=sys.stderr)
+            print(traceback.format_exc(), file=sys.stderr)
             return ERRO
         finally:
             time.sleep(2)
@@ -100,8 +215,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         cpf = sys.argv[1]
     else:
-        print("USO: python rpa_giu.py <cpf_usuario>")
+        print("USO: python rpa_giu.py <cpf_usuario> [bloquear|desbloquear]")
         sys.exit(1)
-    
-    resultado = executar_giu_automatico(cpf)
+
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    resultado = executar_giu_automatico(cpf, acao)
     sys.exit(resultado)

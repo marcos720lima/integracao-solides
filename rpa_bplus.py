@@ -1,4 +1,4 @@
-"""RPA B+ Reembolso - Inativa usuarios no B+"""
+"""RPA B+ Reembolso - Ativa/Inativa usuarios no B+"""
 
 import sys
 import time
@@ -18,7 +18,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 
-def executar_bplus_automatico(email_usuario):
+def executar_bplus_automatico(email_usuario, acao='bloquear'):
+    if acao not in ('bloquear', 'desbloquear'):
+        return ERRO
+
     nome_conta = email_usuario.split('@')[0]
     
     with sync_playwright() as p:
@@ -86,25 +89,36 @@ def executar_bplus_automatico(email_usuario):
             time.sleep(1)
             
             botao_inativar = page.locator("button:has-text('Inativar')")
+            botao_ativar = page.locator("button:has-text('Ativar')")
             
-            if not botao_inativar.is_visible():
-                botao_ativar = page.locator("button:has-text('Ativar')")
+            if acao == 'bloquear' and not botao_inativar.is_visible():
                 if botao_ativar.is_visible():
                     return JA_INATIVO
                 else:
                     return ERRO
-            
-            botao_inativar.click()
+
+            if acao == 'desbloquear' and not botao_ativar.is_visible():
+                if botao_inativar.is_visible():
+                    return JA_INATIVO
+                else:
+                    return ERRO
+
+            if acao == 'bloquear':
+                botao_inativar.click()
+            else:
+                botao_ativar.click()
             time.sleep(2)
             
             page.wait_for_selector("div.modal-body, div#theDialog-body", timeout=5000)
             time.sleep(1)
             
-            botao_ok = page.locator("button.btn-danger:has-text('Ok')")
-            if botao_ok.is_visible():
-                botao_ok.click()
-            else:
+            botao_ok = page.locator("button:has-text('Ok')")
+            if botao_ok.count() > 0 and botao_ok.first.is_visible():
+                botao_ok.first.click()
+            elif acao == 'bloquear':
                 page.click("button.btn-danger")
+            else:
+                page.click("button.btn-success")
             
             time.sleep(3)
             
@@ -120,8 +134,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_bplus.py <email_usuario>")
+        print("USO: python rpa_bplus.py <email_usuario> [bloquear|desbloquear]")
         sys.exit(1)
-    
-    resultado = executar_bplus_automatico(email)
+
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    resultado = executar_bplus_automatico(email, acao)
     sys.exit(resultado)
