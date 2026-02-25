@@ -16,6 +16,7 @@ import smtplib
 import subprocess
 import sys
 import threading
+import csv
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -32,6 +33,11 @@ load_dotenv()
 # Configuração de logs
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+os.makedirs(DATA_DIR, exist_ok=True)
+LOG_MAX_BYTES = int(os.getenv('LOG_MAX_BYTES', 5 * 1024 * 1024))  # 5MB
+LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', 10))  # mantém 10 backups
+DESLIGAMENTOS_CSV = os.getenv('DESLIGAMENTOS_CSV', os.path.join(DATA_DIR, 'desligamentos_historico.csv'))
 
 # Formato do log
 log_format = logging.Formatter(
@@ -39,11 +45,11 @@ log_format = logging.Formatter(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Handler para arquivo (com rotação: 5MB por arquivo, mantém 10 arquivos)
+# Handler para arquivo (com rotação)
 file_handler = RotatingFileHandler(
     os.path.join(LOG_DIR, 'integracao_solides.log'),
-    maxBytes=5*1024*1024,  # 5MB
-    backupCount=10,
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
     encoding='utf-8'
 )
 file_handler.setLevel(logging.INFO)
@@ -57,20 +63,24 @@ console_handler.setFormatter(log_format)
 # Configurar logger principal
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+logger.handlers.clear()
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+logger.propagate = False
 
 # Logger específico para webhooks (arquivo separado)
 webhook_logger = logging.getLogger('webhook')
 webhook_logger.setLevel(logging.INFO)
+webhook_logger.handlers.clear()
 webhook_file_handler = RotatingFileHandler(
     os.path.join(LOG_DIR, 'webhooks.log'),
-    maxBytes=5*1024*1024,  # 5MB
-    backupCount=10,
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
     encoding='utf-8'
 )
 webhook_file_handler.setFormatter(log_format)
 webhook_logger.addHandler(webhook_file_handler)
+webhook_logger.propagate = False
 
 AD_URL = os.getenv('AD_URL')
 AD_USER = os.getenv('AD_USER')
@@ -644,6 +654,13 @@ def processar_demissao_async(dados, cpf):
         webhook_logger.info(f"Erros: {resultado_sistemas.get('erros', 0)}")
         webhook_logger.info("=" * 80)
 
+        # Histórico permanente para auditoria de desligamentos.
+        registrar_desligamento_csv(
+            dados_colaborador=dados,
+            cpf=cpf,
+            status_processamento=resultado_sistemas.get('status_geral', 'N/A')
+        )
+
     except Exception as e:
         logger.error(f"[ERRO] Erro no processamento async: {str(e)}")
         webhook_logger.error(f"ERRO NO PROCESSAMENTO - CPF: {cpf} - {str(e)}")
@@ -664,6 +681,65 @@ def _obter_email_usuario(resultado_ad, dados, cpf):
             email = dados.get('email')
     
     return email
+
+
+def _desligamento_ja_registrado(cpf, data_demissao):
+    """Evita duplicar registros no CSV para o mesmo CPF/data de demissão."""
+    if not os.path.exists(DESLIGAMENTOS_CSV):
+        return False
+
+    try:
+        with open(DESLIGAMENTOS_CSV, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+            leitor = csv.DictReader(arquivo)
+            for linha in leitor:
+                if linha.get('cpf') == str(cpf or '') and linha.get('data_desligamento') == str(data_demissao or ''):
+                    return True
+    except Exception as e:
+        logger.error(f"[ERRO] Falha ao ler histórico de desligamentos CSV: {e}")
+
+    return False
+
+
+def registrar_desligamento_csv(dados_colaborador, cpf, status_processamento='N/A'):
+    """Registra histórico de desligamentos em CSV permanente (sem rotação)."""
+    data_desligamento = dados_colaborador.get('data_demissao', '')
+    if _desligamento_ja_registrado(cpf, data_desligamento):
+        return
+
+    campos = [
+        'data_registro',
+        'nome_colaborador',
+        'cpf',
+        'email',
+        'matricula',
+        'setor',
+        'cargo',
+        'data_desligamento',
+        'status_processamento',
+    ]
+
+    linha = {
+        'data_registro': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'nome_colaborador': dados_colaborador.get('nome', ''),
+        'cpf': cpf or '',
+        'email': dados_colaborador.get('email', ''),
+        'matricula': dados_colaborador.get('matricula', ''),
+        'setor': dados_colaborador.get('departamento', {}).get('nome', ''),
+        'cargo': dados_colaborador.get('cargo', {}).get('nome', ''),
+        'data_desligamento': data_desligamento,
+        'status_processamento': status_processamento,
+    }
+
+    try:
+        arquivo_existe = os.path.exists(DESLIGAMENTOS_CSV)
+        with open(DESLIGAMENTOS_CSV, mode='a', encoding='utf-8-sig', newline='') as arquivo:
+            escritor = csv.DictWriter(arquivo, fieldnames=campos)
+            if not arquivo_existe:
+                escritor.writeheader()
+            escritor.writerow(linha)
+        logger.info(f"[CSV] Histórico de desligamento atualizado: {linha['nome_colaborador']} | CPF {linha['cpf']}")
+    except Exception as e:
+        logger.error(f"[ERRO] Falha ao gravar histórico de desligamentos CSV: {e}")
 
 
 def _executar_rpas(email_usuario, cpf, nome_completo=None):

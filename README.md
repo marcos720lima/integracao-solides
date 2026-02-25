@@ -88,6 +88,11 @@ TI_EMAILS=ti@empresa.com
 # Webhook
 WEBHOOK_SECRET=sua-chave-secreta
 
+# Logs (opcional - se não definir, usa padrão do sistema)
+LOG_MAX_BYTES=5242880
+LOG_BACKUP_COUNT=10
+DESLIGAMENTOS_CSV=C:\IntegracaoSolides\data\desligamentos_historico.csv
+
 # Google Workspace Admin (opcional - fluxo de demissão)
 GOOGLE_ADMIN_ENABLED=false
 GOOGLE_SERVICE_ACCOUNT_FILE=C:\secure\google\service-account.json
@@ -344,10 +349,17 @@ Os logs são salvos automaticamente na pasta `logs/` com rotação:
 |---------|----------|
 | `integracao_solides.log` | Log geral de todas as operações |
 | `webhooks.log` | Log detalhado dos webhooks recebidos |
+| `data/desligamentos_historico.csv` | Histórico permanente de desligamentos (não rotaciona) |
 
 **Características:**
 - Rotação automática: 5MB por arquivo, mantém 10 backups
 - Formato: `2026-02-04 14:30:25 | INFO | [WEBHOOK] Mensagem...`
+- CSV permanente com: colaborador, CPF, email, matrícula, setor, cargo, data de desligamento e status de processamento
+
+**Configuração opcional via `.env`:**
+- `LOG_MAX_BYTES`: tamanho máximo de cada arquivo de log em bytes (padrão: `5242880`)
+- `LOG_BACKUP_COUNT`: quantidade de backups por log rotacionado (padrão: `10`)
+- `DESLIGAMENTOS_CSV`: caminho completo do CSV permanente de desligamentos
 
 **Consultar logs (PowerShell):**
 ```powershell
@@ -359,6 +371,9 @@ Select-String -Path logs\*.log -Pattern "12345678900"
 
 # Buscar erros
 Select-String -Path logs\integracao_solides.log -Pattern "ERROR"
+
+# Últimos 10 desligamentos no CSV permanente
+Get-Content data\desligamentos_historico.csv -Tail 10
 ```
 
 ## Criando RPA para Novos Sites
