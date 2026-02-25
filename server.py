@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
+from google_admin import inativar_email_google_workspace
 
 load_dotenv()
 
@@ -87,6 +88,7 @@ WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET')
 TI_EMAILS = os.getenv('TI_EMAILS', '').split(',')
 
 cpfs_processados = {}
+cpfs_lock = threading.Lock()
 TEMPO_BLOQUEIO_DUPLICATA = 300
 
 STATUS_NAO_EXECUTADO = "Não executado"
@@ -286,11 +288,12 @@ def _interpretar_resultado_rpa(process, nome):
         return {'status': 'nao_encontrado', 'sistema': nome, 'log': process.stdout}
     
     else:
-        logger.error(f"[ERRO] Erro no {nome}: {process.stderr}")
+        detalhe_erro = process.stderr or process.stdout or "Erro desconhecido no subprocesso"
+        logger.error(f"[ERRO] Erro no {nome}: {detalhe_erro}")
         return {
             'status': 'erro',
             'sistema': nome,
-            'erro': process.stderr,
+            'erro': detalhe_erro,
             'log': process.stdout
         }
 
@@ -435,6 +438,7 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
     
     status = {
         'ad': ad_texto,
+        'google': STATUS_NAO_EXECUTADO,
         'jmj': STATUS_NAO_EXECUTADO,
         'saw': STATUS_NAO_EXECUTADO,
         'giu': STATUS_NAO_EXECUTADO,
@@ -453,6 +457,8 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
         
         if 'JMJ' in nome or 'CRM' in nome:
             status['jmj'] = obter_status_formatado(sistema)
+        elif 'GOOGLE' in nome or 'WORKSPACE' in nome:
+            status['google'] = obter_status_formatado(sistema)
         elif 'SAW' in nome:
             status['saw'] = obter_status_formatado(sistema)
         elif 'GIU' in nome:
@@ -523,6 +529,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
             <div class="status-box">
                 <table>
                     <tr><td>AD (Active Directory):</td><td>{status['ad']}</td></tr>
+                    <tr><td>Google Workspace:</td><td>{status['google']}</td></tr>
                     <tr><td>CRM JMJ:</td><td>{status['jmj']}</td></tr>
                     <tr><td>SAW:</td><td>{status['saw']}</td></tr>
                     <tr><td>GIU Unimed:</td><td>{status['giu']}</td></tr>
@@ -564,7 +571,7 @@ def processar_demissao_async(dados, cpf):
         logger.info("🏢 PASSO 1: Desativando usuário no Active Directory...")
         resultado_ad = None
         usuario_encontrado_ad = True
-        
+
         try:
             resultado_ad = desativar_usuario_por_cpf(cpf)
             logger.info(f"[OK] Usuário desativado no AD: {resultado_ad}")
@@ -580,19 +587,24 @@ def processar_demissao_async(dados, cpf):
                 }
             else:
                 raise ad_error
-        
+
         nome_completo = dados.get('nome', '')
         logger.info(f"[NOME] Nome completo: {nome_completo}")
-        
+
         if usuario_encontrado_ad:
             # Fluxo normal: usuário encontrado no AD
             email_usuario = _obter_email_usuario(resultado_ad, dados, cpf)
             logger.info(f"[EMAIL] Email capturado: {email_usuario}")
-            
-            logger.info("[RPA] PASSO 2: Desativando usuário nos sistemas externos...")
+
+            logger.info("[GOOGLE] PASSO 2: Suspendendo usuário no Google Workspace (se habilitado)...")
+            resultado_google = inativar_email_google_workspace(email_usuario)
+            logger.info(f"[GOOGLE] Resultado: {resultado_google}")
+
+            logger.info("[RPA] PASSO 3: Desativando usuário nos sistemas externos...")
             resultado_sistemas = _executar_rpas(email_usuario, cpf, nome_completo)
-            
-            logger.info("[EMAIL] PASSO 3: Enviando email de notificação...")
+            resultado_sistemas = _anexar_resultado_extra(resultado_sistemas, resultado_google)
+
+            logger.info("[EMAIL] PASSO 4: Enviando email de notificação...")
             try:
                 enviar_email_notificacao(dados, resultado_ad, resultado_sistemas)
                 logger.info("[OK] Email de notificação enviado com sucesso!")
@@ -603,7 +615,7 @@ def processar_demissao_async(dados, cpf):
             # Executa apenas sistemas que não requerem AD (usam somente CPF)
             logger.info("[RPA] PASSO 2: Executando APENAS sistemas que usam somente CPF...")
             resultado_sistemas = _executar_rpas_somente_cpf(cpf, nome_completo)
-            
+
             # Monta resultado_ad com status de não encontrado para o email
             resultado_ad = {
                 'cpf': cpf,
@@ -612,16 +624,16 @@ def processar_demissao_async(dados, cpf):
                 'employeeID': cpf,
                 'status': 'nao_encontrado'
             }
-            
+
             logger.info("[EMAIL] PASSO 3: Enviando email de notificação...")
             try:
                 enviar_email_notificacao(dados, resultado_ad, resultado_sistemas)
                 logger.info("[OK] Email de notificação enviado com sucesso!")
             except Exception as email_error:
                 logger.error(f"[ERRO] ERRO ao enviar email: {str(email_error)}")
-        
+
         logger.info(f"[OK] Processamento completo para CPF: {cpf}")
-        
+
         # Log do resultado no arquivo de webhooks
         webhook_logger.info("=" * 80)
         webhook_logger.info(f"PROCESSAMENTO CONCLUÍDO - CPF: {cpf}")
@@ -631,13 +643,14 @@ def processar_demissao_async(dados, cpf):
         webhook_logger.info(f"Sucessos: {resultado_sistemas.get('sucessos', 0)}")
         webhook_logger.info(f"Erros: {resultado_sistemas.get('erros', 0)}")
         webhook_logger.info("=" * 80)
-        
+
     except Exception as e:
         logger.error(f"[ERRO] Erro no processamento async: {str(e)}")
         webhook_logger.error(f"ERRO NO PROCESSAMENTO - CPF: {cpf} - {str(e)}")
     finally:
-        if cpf in cpfs_processados:
-            cpfs_processados[cpf]['processando'] = False
+        with cpfs_lock:
+            if cpf in cpfs_processados:
+                cpfs_processados[cpf]['processando'] = False
 
 
 def _obter_email_usuario(resultado_ad, dados, cpf):
@@ -684,6 +697,25 @@ def _executar_rpas(email_usuario, cpf, nome_completo=None):
         resultado['status_geral'] = 'erro'
     
     return resultado
+
+
+def _anexar_resultado_extra(resultado_sistemas, resultado_extra):
+    """Anexa resultado de sistema extra ao consolidado."""
+    resultado_sistemas['total_sistemas'] += 1
+    resultado_sistemas['detalhes'].append(resultado_extra)
+
+    status = resultado_extra.get('status')
+    if status == 'sucesso':
+        resultado_sistemas['sucessos'] += 1
+    elif status == 'erro':
+        resultado_sistemas['erros'] += 1
+
+    if resultado_sistemas['erros'] > 0 and resultado_sistemas['sucessos'] > 0:
+        resultado_sistemas['status_geral'] = 'parcial'
+    elif resultado_sistemas['erros'] > 0 and resultado_sistemas['sucessos'] == 0:
+        resultado_sistemas['status_geral'] = 'erro'
+
+    return resultado_sistemas
 
 
 def _executar_rpas_somente_cpf(cpf, nome_completo=None):
@@ -873,14 +905,15 @@ def webhook_solides():
         if not cpf or len(cpf) != 11:
             return jsonify({'status': 'erro', 'motivo': 'CPF inválido'}), 400
         
-        if _cpf_ja_processado(cpf):
-            return jsonify({
-                'status': 'ignorado',
-                'motivo': 'CPF já processado recentemente',
-                'cpf': cpf
-            })
-        
-        cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}
+        with cpfs_lock:
+            if _cpf_ja_processado(cpf):
+                return jsonify({
+                    'status': 'ignorado',
+                    'motivo': 'CPF já processado recentemente',
+                    'cpf': cpf
+                })
+
+            cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}
         
         # Log detalhado do webhook aceito
         webhook_logger.info("-" * 40)
@@ -915,14 +948,18 @@ def _cpf_ja_processado(cpf):
     """Verifica se o CPF já foi processado recentemente."""
     if cpf not in cpfs_processados:
         return False
-    
+
     ultimo = cpfs_processados[cpf]
+
+    if ultimo.get('processando'):
+        logger.warning(f"[AVISO] CPF {cpf} já está em processamento. Ignorando duplicata.")
+        return True
+
     tempo_desde = (datetime.now() - ultimo['timestamp']).total_seconds()
-    
     if tempo_desde < TEMPO_BLOQUEIO_DUPLICATA:
         logger.warning(f"[AVISO] CPF {cpf} já processado há {tempo_desde:.0f}s. Ignorando duplicata.")
         return True
-    
+
     return False
 
 

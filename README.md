@@ -9,6 +9,7 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 - ✅ Bloqueia no **GED Bye Bye Paper**
 - ✅ Desativa no **B+ Reembolso**
 - ✅ Desativa no **Tasy EMR**
+- ✅ Suspende no **Google Workspace** (opcional)
 - ✅ Envia **email de notificação** para o TI
 - ✅ **Inativação parcial** quando usuário não encontrado no AD
 - ✅ **Logs automáticos** com rotação
@@ -40,23 +41,26 @@ Sistema automatizado que recebe webhooks do Solides quando um colaborador é dem
 ## Fluxo
 
 ```
-Solides → Webhook → ngrok → Servidor Local → AD + CRM + SAW + GIU + GED + NextQS + B+ + Email
+Solides → Webhook → ngrok → Servidor Local → AD + Google Workspace + CRM + SAW + GIU + GED + NextQS + B+ + Email
 
 > Observação: **NextQS não é executado** no momento.
 ```
 
-## Instalação
+## Instalação (ambiente local ou VM)
 
 ```bash
-# Criar ambiente virtual
+# Criar ambiente virtual (recomendado Python 3.12 ou 3.13)
 python -m venv venv
 venv\Scripts\activate
 
+# Atualizar ferramentas básicas
+python -m pip install -U pip setuptools wheel
+
 # Instalar dependências
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 # Instalar Playwright (navegador para RPA)
-playwright install chromium
+python -m playwright install
 ```
 
 ## Configuração
@@ -83,6 +87,12 @@ TI_EMAILS=ti@empresa.com
 
 # Webhook
 WEBHOOK_SECRET=sua-chave-secreta
+
+# Google Workspace Admin (opcional - fluxo de demissão)
+GOOGLE_ADMIN_ENABLED=false
+GOOGLE_SERVICE_ACCOUNT_FILE=C:\secure\google\service-account.json
+GOOGLE_DELEGATED_ADMIN=admin@empresa.com.br
+GOOGLE_WORKSPACE_DOMAIN=empresa.com.br
 
 # CRM JMJ
 CRM_URL=https://seu-crm.jmjsistemas.com.br/crm
@@ -123,9 +133,42 @@ winget install ngrok.ngrok
 ngrok config add-authtoken SEU_TOKEN
 ```
 
-## Execução
+### 3. Integração Google Workspace (opcional - somente demissão)
 
-### 1. Iniciar servidor
+Se quiser suspender automaticamente o email do colaborador demitido no Google Workspace:
+
+1. Crie/baixe a Service Account JSON e guarde em caminho seguro (fora do repositório).
+2. Ative **Domain-Wide Delegation** na Service Account.
+3. No Admin Console Google, adicione o **Client ID** da Service Account em:
+   - Security > API controls > Domain-wide delegation
+4. Autorize os scopes:
+   - `https://www.googleapis.com/auth/admin.directory.user.readonly` (teste/leitura)
+   - `https://www.googleapis.com/auth/admin.directory.user` (suspensão)
+5. Configure no `.env`:
+
+```env
+GOOGLE_ADMIN_ENABLED=true
+GOOGLE_SERVICE_ACCOUNT_FILE=C:\secure\google\service-account.json
+GOOGLE_DELEGATED_ADMIN=admin@empresa.com.br
+GOOGLE_WORKSPACE_DOMAIN=empresa.com.br
+```
+
+Regras aplicadas no fluxo:
+
+- Se não houver email do colaborador, o Google é **pulado** e o processo continua.
+- Se o email do colaborador for igual ao admin delegado, o Google é **pulado**.
+- Se ocorrer erro no Google, os demais sistemas continuam normalmente.
+- Esta integração é usada no fluxo de demissão.
+
+Teste rápido de autenticação (PowerShell):
+
+```powershell
+python -c "from dotenv import load_dotenv; load_dotenv('.env'); from google.oauth2 import service_account; from googleapiclient.discovery import build; import os; f=os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE'); a=os.getenv('GOOGLE_DELEGATED_ADMIN'); scopes=['https://www.googleapis.com/auth/admin.directory.user.readonly']; creds=service_account.Credentials.from_service_account_file(f, scopes=scopes).with_subject(a); svc=build('admin','directory_v1',credentials=creds,cache_discovery=False); resp=svc.users().get(userKey=a).execute(); print('OK Google Admin:', resp.get('primaryEmail'))"
+```
+
+## Execução (ambiente local)
+
+### 1. Iniciar servidor (desenvolvimento)
 ```bash
 python server.py
 ```
@@ -143,6 +186,44 @@ ngrok http 3000
 | Evento | `demissao_colaborador` |
 | Header | `X-Webhook-Secret` |
 | Valor | sua chave do .env |
+
+---
+
+## Execução em VM Windows 10 (Proxmox)
+
+Para um passo a passo completo (instalar Python, venv, Playwright, Proxmox, Agendador de Tarefas), veja o arquivo `VM_WINDOWS.md`.
+
+### 1. Preparar ambiente na VM (resumo)
+
+```cmd
+cd C:\IntegracaoSolides
+python -m venv venv
+call venv\Scripts\activate.bat
+python -m pip install -U pip setuptools wheel
+python -m pip install -r requirements.txt
+python -m playwright install
+```
+
+Certifique-se de copiar o `.env` para a pasta do projeto na VM.
+
+### 2. Subir servidor + ngrok com o .bat
+
+Na VM, após instalar o `ngrok` e configurar o `authtoken`:
+
+```cmd
+cd C:\IntegracaoSolides
+iniciar_servidor_vm.bat
+```
+
+Esse script:
+
+- Abre uma janela com o servidor (Waitress) em `http://localhost:3000`
+- Abre outra janela com `ngrok http 3000`
+
+Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para configurar o webhook no Solides:
+
+- URL: `https://xxxx.ngrok-free.app/webhook/solides`
+- Header: `X-Webhook-Secret` = mesmo valor do `.env`
 
 ## Estrutura
 
@@ -180,6 +261,7 @@ ngrok http 3000
 | Sistema | Script | Identificador | Ação |
 |---------|--------|---------------|------|
 | Active Directory | - | CPF | Desativa conta |
+| Google Workspace (opcional) | `google_admin.py` | Email | Suspende conta |
 | CRM JMJ | `rpa_crm.py` | Email | Desativa usuário |
 | SAW | `rpa_saw.py` | Email | Desativa usuário |
 | GIU Unimed | `rpa_giu.py` | CPF | Desativa conta |
@@ -200,6 +282,7 @@ Informações do Colaborador
 
 Inativações Realizadas
 ├── AD (Active Directory): Desativado
+├── Google Workspace:      Suspenso
 ├── CRM JMJ:               Desativado
 ├── SAW:                   Desativado
 ├── GIU Unimed:            Desativado

@@ -5,6 +5,8 @@ env/
 
 # Variáveis de ambiente (NUNCA commitar!)
 .env
+service-account.json
+service-account-*.json
 
 # Python
 __pycache__/
