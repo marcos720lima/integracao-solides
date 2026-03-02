@@ -127,16 +127,42 @@ def executar_giu_automatico(cpf_usuario, acao='bloquear'):
                 campo_busca.press("Enter")
             time.sleep(3)
 
+            # Aguarda possíveis overlays/spinners antes de tentar clicar no editar.
+            try:
+                page.locator(
+                    ".loading, .spinner, .v-overlay, .overlay, [class*='loading'], [class*='spinner']"
+                ).first.wait_for(state="hidden", timeout=5000)
+            except Exception:
+                pass
+
             try:
                 icone_editar = page.locator(
-                    "div.icone-acao.habilitado, [class*='icone-acao'][class*='habilitado'], button[aria-label*='Editar']"
+                    "div.icone-acao.habilitado:visible, "
+                    "[class*='icone-acao'][class*='habilitado']:visible, "
+                    "button[aria-label*='Editar']:visible"
                 )
                 if icone_editar.count() == 0:
                     return NAO_ENCONTRADO
             except Exception:
                 return NAO_ENCONTRADO
 
-            icone_editar.first.click()
+            alvo = icone_editar.first
+            try:
+                alvo.scroll_into_view_if_needed(timeout=5000)
+            except Exception:
+                pass
+
+            try:
+                alvo.click(timeout=7000)
+            except Exception:
+                # Fallback: força clique quando há sobreposição/estado visual instável.
+                try:
+                    alvo.click(timeout=5000, force=True)
+                except Exception:
+                    handle = alvo.element_handle()
+                    if not handle:
+                        return ERRO
+                    page.evaluate("(el) => el.click()", handle)
             time.sleep(3)
 
             try:
