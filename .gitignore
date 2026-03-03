@@ -33,3 +33,6 @@ Thumbs.db
 playwright-report/
 test-results/
 
+# Testes locais / PoCs
+testes/
+ferias/
