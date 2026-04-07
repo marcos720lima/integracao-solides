@@ -391,6 +391,3 @@ O gravador captura cliques e digitação, gerando o código automaticamente.
 **Desenvolvido por:** Marcos Vinicius Viana Lima  
 **Versão:** 2.6
 
-## Documentação Completa
-
-Para procedimentos detalhados, consulte o **POP (Procedimento Operacional Padrão)**: `POP_INTEGRACAO_SOLIDES.md`
