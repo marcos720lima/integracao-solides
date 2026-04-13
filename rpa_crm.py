@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
@@ -53,6 +54,33 @@ def _erro_navegador_fechado(exc):
     return "Target page, context or browser has been closed" in msg or "TargetClosedError" in msg
 
 
+def _first_visible(page, selectors, timeout=15000):
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            locator.wait_for(state="visible", timeout=timeout)
+            return locator
+        except Exception:
+            continue
+    return None
+
+
+def _salvar_debug(page, prefixo="crm"):
+    try:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = f"debug_{prefixo}_{ts}"
+        page.screenshot(path=f"{base}.png", full_page=True)
+        try:
+            html = page.content()
+            with open(f"{base}.html", "w", encoding="utf-8") as f:
+                f.write(html)
+        except Exception:
+            pass
+        print(f"[CRM] Debug salvo: {base}.png / {base}.html (url={page.url})", file=sys.stderr)
+    except Exception:
+        pass
+
+
 def _executar_fluxo(page, email_usuario, acao):
     nome_usuario = email_usuario.split("@")[0].replace(".", " ").lower()
 
@@ -62,15 +90,43 @@ def _executar_fluxo(page, email_usuario, acao):
     page.wait_for_load_state("domcontentloaded", timeout=60000)
     time.sleep(3)
 
-    page.wait_for_selector("input[ng-model='credentials.username']", timeout=60000)
-    page.click("input[ng-model='credentials.username']")
-    page.fill("input[ng-model='credentials.username']", "")
-    page.type("input[ng-model='credentials.username']", CRM_USERNAME, delay=100)
+    campo_usuario = _first_visible(
+        page,
+        [
+            "input[ng-model='credentials.username']",
+            "input[name='username']",
+            "input[name='usuario']",
+            "input[type='email']",
+            "input[placeholder*='Usu']",
+            "input[placeholder*='E-mail']",
+            "input[placeholder*='Email']",
+            "input[type='text']",
+        ],
+        timeout=60000,
+    )
+    campo_senha = _first_visible(
+        page,
+        [
+            "input[name='senha']",
+            "input[name='password']",
+            "input[type='password']",
+            "input[placeholder*='Senha']",
+        ],
+        timeout=60000,
+    )
 
-    page.wait_for_selector("input[name='senha']", timeout=60000)
-    page.click("input[name='senha']")
-    page.fill("input[name='senha']", "")
-    page.type("input[name='senha']", CRM_PASSWORD, delay=100)
+    if not campo_usuario or not campo_senha:
+        print("[CRM] Campos de login não encontrados (tela pode ter mudado/SSO/captcha).", file=sys.stderr)
+        _salvar_debug(page, "crm_login")
+        return ERRO
+
+    campo_usuario.click()
+    campo_usuario.fill("")
+    campo_usuario.type(CRM_USERNAME, delay=100)
+
+    campo_senha.click()
+    campo_senha.fill("")
+    campo_senha.type(CRM_PASSWORD, delay=100)
 
     # Em algumas versões do CRM o Angular pode não estar no escopo.
     try:
@@ -81,7 +137,21 @@ def _executar_fluxo(page, email_usuario, acao):
     except Exception:
         pass
 
-    page.click("[ng-click='login(credentials)']")
+    botao_login = _first_visible(
+        page,
+        [
+            "[ng-click='login(credentials)']",
+            "button[type='submit']",
+            "button:has-text('Entrar')",
+            "button:has-text('Login')",
+        ],
+        timeout=15000,
+    )
+    if not botao_login:
+        print("[CRM] Botão de login não encontrado.", file=sys.stderr)
+        _salvar_debug(page, "crm_login_sem_botao")
+        return ERRO
+    botao_login.click()
     time.sleep(8)
 
     page.goto(f"{CRM_URL}/#/configuracoes/usuarios", timeout=30000)
