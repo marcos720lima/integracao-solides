@@ -59,13 +59,28 @@ def _log(msg):
 
 
 def _first_visible(page, selectors, timeout=15000):
-    for selector in selectors:
-        try:
-            locator = page.locator(selector).first
-            locator.wait_for(state="visible", timeout=timeout)
-            return locator
-        except Exception:
-            continue
+    if not selectors:
+        return None
+
+    # Alguns logins SPA demoram para renderizar; precisamos respeitar o timeout total
+    # sem ficar "preso" muito tempo em um único seletor.
+    deadline = time.time() + (timeout / 1000.0)
+
+    while time.time() < deadline:
+        restante_ms = int(max(0, (deadline - time.time()) * 1000))
+        # Tenta rápido por seletor, repetindo até o timeout total.
+        por_seletor_ms = min(4000, max(500, int(restante_ms / max(1, len(selectors)))))
+
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).first
+                locator.wait_for(state="visible", timeout=por_seletor_ms)
+                return locator
+            except Exception:
+                continue
+
+        time.sleep(0.3)
+
     return None
 
 

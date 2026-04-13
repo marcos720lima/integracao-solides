@@ -318,7 +318,9 @@ def _interpretar_resultado_rpa(process, nome):
         return {'status': 'nao_encontrado', 'sistema': nome, 'log': process.stdout}
     
     else:
-        detalhe_erro = process.stderr or process.stdout or "Erro desconhecido no subprocesso"
+        detalhe_erro = process.stderr or process.stdout
+        if not detalhe_erro:
+            detalhe_erro = f"Erro desconhecido no subprocesso (exit_code={codigo})"
         logger.error(f"[ERRO] Erro no {nome}: {detalhe_erro}")
         return {
             'status': 'erro',
