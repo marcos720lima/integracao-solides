@@ -107,11 +107,10 @@ def _salvar_debug(page, prefixo="crm"):
 def _executar_fluxo(page, email_usuario, acao):
     nome_usuario = email_usuario.split("@")[0].replace(".", " ").lower()
 
-    # Em VM, bloquear assets pesados reduz bastante o uso de RAM e evita crash do renderer.
+    # Só bloqueia vídeo/áudio (economiza RAM). Não bloquear font: ícones do CRM são fonte (Font Awesome etc.).
     def _route_bloqueio(route):
         try:
-            rtype = route.request.resource_type
-            if rtype in ("image", "media", "font"):
+            if route.request.resource_type == "media":
                 return route.abort()
             return route.continue_()
         except Exception:
@@ -194,12 +193,33 @@ def _executar_fluxo(page, email_usuario, acao):
         _salvar_debug(page, "crm_login_sem_botao")
         return ERRO
     botao_login.click()
-    time.sleep(8)
+    _log("Aguardando login (saindo da tela de autenticação)")
+    try:
+        page.wait_for_function(
+            "() => window.location.hash && !window.location.hash.includes('authenticate')",
+            timeout=60000,
+        )
+    except Exception:
+        pass
+    time.sleep(2)
 
-    _log("Abrindo página de usuários")
-    page.goto(f"{CRM_URL}/#/configuracoes/usuarios", wait_until="domcontentloaded", timeout=60000)
+    base_url = CRM_URL.rstrip("/")
+    _log("Indo para Pesquisa de Usuários")
+    page.goto(
+        f"{base_url}/#/configuracoes/usuarios",
+        wait_until="domcontentloaded",
+        timeout=60000,
+    )
     page.wait_for_load_state("domcontentloaded", timeout=30000)
-    time.sleep(3)
+    try:
+        page.wait_for_selector(
+            "input[ng-model='search.email']",
+            state="visible",
+            timeout=45000,
+        )
+    except Exception:
+        _log("Campo de pesquisa ainda não apareceu; aguardando mais um pouco")
+        time.sleep(4)
 
     _log(f"Pesquisando usuário: {email_usuario}")
     page.fill("input[ng-model='search.email']", email_usuario)
