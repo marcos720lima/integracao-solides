@@ -20,9 +20,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 TENTATIVAS_EXECUCAO = [
-    {"headless": False, "usar_chrome": True},
-    {"headless": True, "usar_chrome": True},
+    # Em VM/Windows, o Chromium do Playwright em headless costuma ser o mais estável.
     {"headless": True, "usar_chrome": False},
+    {"headless": True, "usar_chrome": True},
+    {"headless": False, "usar_chrome": True},
 ]
 
 
@@ -34,10 +35,14 @@ def _opcoes_lancamento(headless, usar_chrome):
             "--disable-backgrounding-occluded-windows",
             "--disable-background-timer-throttling",
             "--disable-breakpad",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--no-first-run",
+            "--no-default-browser-check",
         ],
     }
     if not headless:
-        opcoes["args"].extend(["--window-size=600,400", "--window-position=3000,3000"])
+        opcoes["args"].extend(["--window-size=900,650", "--window-position=50,50"])
     if usar_chrome:
         opcoes["channel"] = "chrome"
     return opcoes
@@ -51,14 +56,18 @@ def _erro_navegador_fechado(exc):
 def _executar_fluxo(page, email_usuario, acao):
     nome_usuario = email_usuario.split("@")[0].replace(".", " ").lower()
 
-    page.goto(f"{CRM_URL}/#/authenticate", timeout=60000)
-    page.wait_for_load_state("domcontentloaded", timeout=30000)
+    # CRM é SPA (Angular): esperar por "load" pode ficar pendurado por assets/requests.
+    # Preferimos domcontentloaded e aguardamos o campo de login aparecer.
+    page.goto(f"{CRM_URL}/#/authenticate", wait_until="domcontentloaded", timeout=120000)
+    page.wait_for_load_state("domcontentloaded", timeout=60000)
     time.sleep(3)
 
+    page.wait_for_selector("input[ng-model='credentials.username']", timeout=60000)
     page.click("input[ng-model='credentials.username']")
     page.fill("input[ng-model='credentials.username']", "")
     page.type("input[ng-model='credentials.username']", CRM_USERNAME, delay=100)
 
+    page.wait_for_selector("input[name='senha']", timeout=60000)
     page.click("input[name='senha']")
     page.fill("input[name='senha']", "")
     page.type("input[name='senha']", CRM_PASSWORD, delay=100)
