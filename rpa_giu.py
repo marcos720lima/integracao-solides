@@ -19,9 +19,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 TENTATIVAS_EXECUCAO = [
-    {"headless": False, "usar_chrome": True},
-    {"headless": True, "usar_chrome": True},
+    # Em VM/Windows, o "channel=chrome" pode fechar/crashar cedo; comece pelo Chromium do Playwright.
     {"headless": True, "usar_chrome": False},
+    {"headless": True, "usar_chrome": True},
+    {"headless": False, "usar_chrome": True},
 ]
 
 
@@ -44,10 +45,15 @@ def _opcoes_lancamento(headless, usar_chrome):
             "--disable-backgrounding-occluded-windows",
             "--disable-background-timer-throttling",
             "--disable-breakpad",
+            # VMs costumam ter driver/GPU instável; isso reduz crash no start.
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--no-first-run",
+            "--no-default-browser-check",
         ],
     }
     if not headless:
-        opcoes["args"].extend(["--window-size=600,400", "--window-position=3000,3000"])
+        opcoes["args"].extend(["--window-size=900,650", "--window-position=50,50"])
     if usar_chrome:
         opcoes["channel"] = "chrome"
     return opcoes
