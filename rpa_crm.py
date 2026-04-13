@@ -21,10 +21,12 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 TENTATIVAS_EXECUCAO = [
-    # Priorize headful para acompanhar visualmente; fallback para headless se necessário.
+    # Em VM, Chrome pode consumir mais memória e cair com "Out of Memory".
+    # Priorize Chromium do Playwright (mais leve) em modo com janela, depois tenta Chrome.
+    {"headless": False, "usar_chrome": False},
     {"headless": False, "usar_chrome": True},
-    {"headless": True, "usar_chrome": True},
     {"headless": True, "usar_chrome": False},
+    {"headless": True, "usar_chrome": True},
 ]
 
 
@@ -40,6 +42,8 @@ def _opcoes_lancamento(headless, usar_chrome):
             "--disable-software-rasterizer",
             "--no-first-run",
             "--no-default-browser-check",
+            # Reduz pressão de memória em VM
+            "--disable-features=BackForwardCache,Translate,site-per-process",
         ],
     }
     if not headless:
@@ -102,6 +106,21 @@ def _salvar_debug(page, prefixo="crm"):
 
 def _executar_fluxo(page, email_usuario, acao):
     nome_usuario = email_usuario.split("@")[0].replace(".", " ").lower()
+
+    # Em VM, bloquear assets pesados reduz bastante o uso de RAM e evita crash do renderer.
+    def _route_bloqueio(route):
+        try:
+            rtype = route.request.resource_type
+            if rtype in ("image", "media", "font"):
+                return route.abort()
+            return route.continue_()
+        except Exception:
+            return route.continue_()
+
+    try:
+        page.route("**/*", _route_bloqueio)
+    except Exception:
+        pass
 
     # CRM é SPA (Angular): esperar por "load" pode ficar pendurado por assets/requests.
     # Preferimos domcontentloaded e aguardamos o campo de login aparecer.
