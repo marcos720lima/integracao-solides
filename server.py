@@ -30,6 +30,25 @@ from google_admin import inativar_email_google_workspace
 
 load_dotenv()
 
+# Playwright usa um processo Node.js por baixo; em ambientes Windows/VM
+# pode estourar o limite padrão de heap e cair com "JavaScript heap out of memory".
+def _env_com_node_heap_maior():
+    env = os.environ.copy()
+    node_options = (env.get("NODE_OPTIONS") or "").strip()
+
+    # Permite override via .env, mantendo compatibilidade com NODE_OPTIONS existente
+    heap_mb_raw = (os.getenv("PLAYWRIGHT_MAX_OLD_SPACE_SIZE_MB") or "").strip()
+    try:
+        heap_mb = int(heap_mb_raw) if heap_mb_raw else 4096
+    except ValueError:
+        heap_mb = 4096
+
+    if "--max-old-space-size" not in node_options:
+        extra = f"--max-old-space-size={heap_mb}"
+        env["NODE_OPTIONS"] = f"{node_options} {extra}".strip() if node_options else extra
+
+    return env
+
 # Configuração de logs
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -260,7 +279,8 @@ def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_compl
             timeout=timeout,
             cwd=os.getcwd(),
             shell=False,
-            stdin=subprocess.DEVNULL
+            stdin=subprocess.DEVNULL,
+            env=_env_com_node_heap_maior()
         )
         
         return _interpretar_resultado_rpa(process, nome)

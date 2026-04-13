@@ -149,13 +149,25 @@ def executar_rpa(script, parametro):
     
     try:
         cmd = f'python {script} "{parametro}"'
+        env = os.environ.copy()
+        node_options = (env.get("NODE_OPTIONS") or "").strip()
+        heap_mb_raw = (os.getenv("PLAYWRIGHT_MAX_OLD_SPACE_SIZE_MB") or "").strip()
+        try:
+            heap_mb = int(heap_mb_raw) if heap_mb_raw else 4096
+        except ValueError:
+            heap_mb = 4096
+        if "--max-old-space-size" not in node_options:
+            extra = f"--max-old-space-size={heap_mb}"
+            env["NODE_OPTIONS"] = f"{node_options} {extra}".strip() if node_options else extra
+
         process = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=300,
             cwd=os.getcwd(),
-            shell=True
+            shell=True,
+            env=env
         )
         
         codigo = process.returncode

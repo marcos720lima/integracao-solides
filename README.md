@@ -376,6 +376,27 @@ Select-String -Path logs\integracao_solides.log -Pattern "ERROR"
 Get-Content data\desligamentos_historico.csv -Tail 10
 ```
 
+## Troubleshooting
+
+### Erro "JavaScript heap out of memory" (GIU/GED/etc)
+
+Os RPAs usam **Playwright**, que executa um processo **Node.js** internamente. Em alguns ambientes (principalmente Windows/VM), o Node pode estourar o heap padrão e encerrar com:
+
+- `FATAL ERROR: ... JavaScript heap out of memory`
+
+**Correção recomendada:** defina no `.env`:
+
+```env
+PLAYWRIGHT_MAX_OLD_SPACE_SIZE_MB=4096
+```
+
+Se precisar aplicar temporariamente no PowerShell (sem mexer no `.env`):
+
+```powershell
+$env:NODE_OPTIONS="--max-old-space-size=4096"
+python server.py
+```
+
 ## Criando RPA para Novos Sites
 
 Use o script de inspeção para mapear elementos de novos sistemas:
