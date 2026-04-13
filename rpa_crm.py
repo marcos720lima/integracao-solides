@@ -21,10 +21,10 @@ JA_INATIVO = 2
 NAO_ENCONTRADO = 3
 
 TENTATIVAS_EXECUCAO = [
-    # Em VM/Windows, o Chromium do Playwright em headless costuma ser o mais estável.
-    {"headless": True, "usar_chrome": False},
-    {"headless": True, "usar_chrome": True},
+    # Priorize headful para acompanhar visualmente; fallback para headless se necessário.
     {"headless": False, "usar_chrome": True},
+    {"headless": True, "usar_chrome": True},
+    {"headless": True, "usar_chrome": False},
 ]
 
 
@@ -43,7 +43,7 @@ def _opcoes_lancamento(headless, usar_chrome):
         ],
     }
     if not headless:
-        opcoes["args"].extend(["--window-size=900,650", "--window-position=50,50"])
+        opcoes["args"].extend(["--window-size=1100,800", "--window-position=40,40"])
     if usar_chrome:
         opcoes["channel"] = "chrome"
     return opcoes
@@ -52,6 +52,10 @@ def _opcoes_lancamento(headless, usar_chrome):
 def _erro_navegador_fechado(exc):
     msg = str(exc)
     return "Target page, context or browser has been closed" in msg or "TargetClosedError" in msg
+
+
+def _log(msg):
+    print(f"[CRM] {msg}", file=sys.stderr)
 
 
 def _first_visible(page, selectors, timeout=15000):
@@ -76,7 +80,7 @@ def _salvar_debug(page, prefixo="crm"):
                 f.write(html)
         except Exception:
             pass
-        print(f"[CRM] Debug salvo: {base}.png / {base}.html (url={page.url})", file=sys.stderr)
+        _log(f"Debug salvo: {base}.png / {base}.html (url={page.url})")
     except Exception:
         pass
 
@@ -86,10 +90,12 @@ def _executar_fluxo(page, email_usuario, acao):
 
     # CRM é SPA (Angular): esperar por "load" pode ficar pendurado por assets/requests.
     # Preferimos domcontentloaded e aguardamos o campo de login aparecer.
+    _log(f"Abrindo login: {CRM_URL}/#/authenticate")
     page.goto(f"{CRM_URL}/#/authenticate", wait_until="domcontentloaded", timeout=120000)
     page.wait_for_load_state("domcontentloaded", timeout=60000)
     time.sleep(3)
 
+    _log("Procurando campos de login")
     campo_usuario = _first_visible(
         page,
         [
@@ -116,10 +122,11 @@ def _executar_fluxo(page, email_usuario, acao):
     )
 
     if not campo_usuario or not campo_senha:
-        print("[CRM] Campos de login não encontrados (tela pode ter mudado/SSO/captcha).", file=sys.stderr)
+        _log("Campos de login não encontrados (tela pode ter mudado/SSO/captcha/erro de acesso).")
         _salvar_debug(page, "crm_login")
         return ERRO
 
+    _log("Preenchendo usuário/senha")
     campo_usuario.click()
     campo_usuario.fill("")
     campo_usuario.type(CRM_USERNAME, delay=100)
@@ -137,6 +144,7 @@ def _executar_fluxo(page, email_usuario, acao):
     except Exception:
         pass
 
+    _log("Clicando em Entrar/Login")
     botao_login = _first_visible(
         page,
         [
@@ -148,16 +156,18 @@ def _executar_fluxo(page, email_usuario, acao):
         timeout=15000,
     )
     if not botao_login:
-        print("[CRM] Botão de login não encontrado.", file=sys.stderr)
+        _log("Botão de login não encontrado.")
         _salvar_debug(page, "crm_login_sem_botao")
         return ERRO
     botao_login.click()
     time.sleep(8)
 
-    page.goto(f"{CRM_URL}/#/configuracoes/usuarios", timeout=30000)
-    page.wait_for_load_state("domcontentloaded", timeout=15000)
+    _log("Abrindo página de usuários")
+    page.goto(f"{CRM_URL}/#/configuracoes/usuarios", wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_load_state("domcontentloaded", timeout=30000)
     time.sleep(3)
 
+    _log(f"Pesquisando usuário: {email_usuario}")
     page.fill("input[ng-model='search.email']", email_usuario)
     page.click("button[ng-click='pesquisar(search)']")
     time.sleep(3)
