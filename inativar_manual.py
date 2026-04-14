@@ -105,6 +105,7 @@ def desativar_ad(cpf):
     """Desativa usuário no Active Directory."""
     try:
         from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
+        from ldap3.utils.conv import escape_filter_chars
         
         AD_URL = os.getenv('AD_URL')
         AD_USER = os.getenv('AD_USER')
@@ -118,10 +119,12 @@ def desativar_ad(cpf):
         
         print_sucesso("Conectado ao AD")
         
-        search_filter = f"(&(objectClass=user)(employeeID={cpf}))"
+        cpf_sanitizado = escape_filter_chars(cpf)
+        search_filter = f"(&(objectClass=user)(employeeID={cpf_sanitizado}))"
         conn.search(BASE_DN, search_filter, attributes=['userAccountControl', 'sAMAccountName', 'displayName'])
         
         if not conn.entries:
+            conn.unbind()
             return {'status': 'nao_encontrado', 'msg': f'Usuário com CPF {cpf} não encontrado no AD'}
         
         usuario = conn.entries[0]
@@ -130,7 +133,9 @@ def desativar_ad(cpf):
         print_info(f"Usuário encontrado: {nome} ({usuario.sAMAccountName.value})")
         
         user_dn = str(usuario.entry_dn)
-        modificacao = {'userAccountControl': [(MODIFY_REPLACE, [514])]}
+        uac_atual = int(str(usuario.userAccountControl.value))
+        uac_novo = uac_atual | 0x2
+        modificacao = {'userAccountControl': [(MODIFY_REPLACE, [uac_novo])]}
         
         if conn.modify(user_dn, modificacao):
             conn.unbind()
@@ -142,32 +147,41 @@ def desativar_ad(cpf):
     except Exception as e:
         return {'status': 'erro', 'msg': str(e)}
 
-def executar_rpa(script, parametro):
-    """Executa um script RPA."""
+def _env_com_node_heap_maior():
+    """Configura NODE_OPTIONS para evitar 'heap out of memory' no Playwright."""
+    env = os.environ.copy()
+    node_options = (env.get("NODE_OPTIONS") or "").strip()
+    heap_mb_raw = (os.getenv("PLAYWRIGHT_MAX_OLD_SPACE_SIZE_MB") or "").strip()
+    try:
+        heap_mb = int(heap_mb_raw) if heap_mb_raw else 4096
+    except ValueError:
+        heap_mb = 4096
+    if "--max-old-space-size" not in node_options:
+        extra = f"--max-old-space-size={heap_mb}"
+        env["NODE_OPTIONS"] = f"{node_options} {extra}".strip() if node_options else extra
+    return env
+
+
+def executar_rpa(script, args_extra):
+    """Executa um script RPA. args_extra deve ser uma lista de argumentos."""
     if not os.path.exists(script):
         return {'status': 'erro', 'msg': f'Script {script} não encontrado'}
     
+    if isinstance(args_extra, str):
+        args_extra = [args_extra]
+    
     try:
-        cmd = f'python {script} "{parametro}"'
-        env = os.environ.copy()
-        node_options = (env.get("NODE_OPTIONS") or "").strip()
-        heap_mb_raw = (os.getenv("PLAYWRIGHT_MAX_OLD_SPACE_SIZE_MB") or "").strip()
-        try:
-            heap_mb = int(heap_mb_raw) if heap_mb_raw else 4096
-        except ValueError:
-            heap_mb = 4096
-        if "--max-old-space-size" not in node_options:
-            extra = f"--max-old-space-size={heap_mb}"
-            env["NODE_OPTIONS"] = f"{node_options} {extra}".strip() if node_options else extra
+        cmd_args = [sys.executable, script] + args_extra
 
         process = subprocess.run(
-            cmd,
+            cmd_args,
             capture_output=True,
             text=True,
             timeout=300,
             cwd=os.getcwd(),
-            shell=True,
-            env=env
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            env=_env_com_node_heap_maior()
         )
         
         codigo = process.returncode
@@ -209,20 +223,17 @@ def processar_sistema(sistema_id, cpf=None, email=None, nome=None):
             print_aviso(f"Nome não informado - pulando {nome_sistema}")
             return {'status': 'pulado', 'msg': 'Nome não informado'}
     
-    # Executar
     if sistema_id == 'ad':
         resultado = desativar_ad(cpf)
     elif sistema_id == 'giu':
-        resultado = executar_rpa(config['script'], cpf)
+        resultado = executar_rpa(config['script'], [cpf])
     elif sistema_id == 'tasy':
         nome_conta = email.split('@')[0] if email else ''
-        parametro = f'"{nome}" {nome_conta}'
-        resultado = executar_rpa(config['script'], parametro)
+        resultado = executar_rpa(config['script'], [nome, nome_conta])
     elif sistema_id == 'bplus':
-        nome_conta = email.split('@')[0] if email else ''
-        resultado = executar_rpa(config['script'], nome_conta)
+        resultado = executar_rpa(config['script'], [email])
     else:
-        resultado = executar_rpa(config['script'], email)
+        resultado = executar_rpa(config['script'], [email])
     
     # Mostrar resultado
     status = resultado['status']
@@ -314,7 +325,7 @@ def enviar_email_notificacao_manual(cpf, email, nome, resultados):
         # Enviar email
         enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas)
         
-        print_sucesso(f"Email enviado com sucesso!")
+        print_sucesso("Email enviado com sucesso!")
         return True
         
     except Exception as e:

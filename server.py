@@ -25,7 +25,9 @@ from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
+from ldap3.utils.conv import escape_filter_chars
 from google_admin import inativar_email_google_workspace
 
 load_dotenv()
@@ -119,6 +121,7 @@ TI_EMAILS = os.getenv('TI_EMAILS', '').split(',')
 cpfs_processados = {}
 cpfs_lock = threading.Lock()
 TEMPO_BLOQUEIO_DUPLICATA = 300
+SENSITIVE_HEADERS = {'authorization', 'cookie', 'x-webhook-secret', 'x-api-key'}
 
 STATUS_NAO_EXECUTADO = "Não executado"
 STATUS_DESATIVADO = "Desativado"
@@ -188,11 +191,12 @@ SISTEMAS_CONFIG = {
 
 app = Flask(__name__)
 
+_cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '').strip()
 CORS(app, resources={
     r"/*": {
-        "origins": ["*"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "origins": _cors_origins.split(',') if _cors_origins else ["*"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Webhook-Secret"]
     }
 })
 
@@ -212,6 +216,13 @@ def formatar_cpf(cpf):
     if not cpf_limpo or len(cpf_limpo) != 11:
         return cpf
     return f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}.{cpf_limpo[6:9]}-{cpf_limpo[9:]}"
+
+
+def _mascarar_cpf(cpf):
+    """Mascara CPF para exibição em logs (LGPD)."""
+    if not cpf or len(cpf) < 4:
+        return '***'
+    return f"***.***.***-{cpf[-2:]}"
 
 
 def obter_status_formatado(sistema, usar_bloqueado=False):
@@ -344,41 +355,53 @@ def _criar_conexao_ad():
 
 def desativar_usuario_por_cpf(cpf):
     """Desativa um usuário no AD pelo CPF (employeeID)."""
-    logger.info(f"[PROC] Iniciando desativação do usuário com CPF: {cpf}")
+    logger.info(f"[PROC] Iniciando desativação do usuário com CPF: {_mascarar_cpf(cpf)}")
     
     conn = _criar_conexao_ad()
     logger.info("Conectado no AD para desativação")
     
     try:
-        search_filter = f"(&(objectClass=user)(employeeID={cpf}))"
-        attributes = ['userAccountControl', 'sAMAccountName', 'employeeID', 'cn', 'displayName']
+        cpf_sanitizado = escape_filter_chars(cpf)
+        search_filter = f"(&(objectClass=user)(employeeID={cpf_sanitizado}))"
+        attributes = [
+            'userAccountControl', 'sAMAccountName', 'employeeID',
+            'cn', 'displayName', 'mail', 'userPrincipalName',
+        ]
         
         conn.search(BASE_DN, search_filter, attributes=attributes)
         
         if not conn.entries:
-            raise ValueError(f"Usuário com CPF/EmployeeID {cpf} não encontrado no AD")
+            raise ValueError(f"Usuário com CPF/EmployeeID {_mascarar_cpf(cpf)} não encontrado no AD")
         
         usuario = conn.entries[0]
         nome_usuario = usuario.displayName.value if usuario.displayName else usuario.cn.value
         
-        logger.info("👤 Usuário encontrado para desativação:")
+        logger.info("[AD] Usuário encontrado para desativação:")
         logger.info(f"   - Nome: {nome_usuario}")
         logger.info(f"   - Login: {usuario.sAMAccountName.value}")
-        logger.info(f"   - EmployeeID: {usuario.employeeID.value}")
         
         user_dn = str(usuario.entry_dn)
-        modificacao = {'userAccountControl': [(MODIFY_REPLACE, [514])]}
+        uac_atual = int(str(usuario.userAccountControl.value))
+        uac_novo = uac_atual | 0x2
+        modificacao = {'userAccountControl': [(MODIFY_REPLACE, [uac_novo])]}
         
         if not conn.modify(user_dn, modificacao):
             raise RuntimeError(f"Erro ao desativar usuário: {conn.result}")
         
-        logger.info(f"[OK] Usuário {usuario.sAMAccountName.value} (CPF: {cpf}) desativado com sucesso no AD")
+        logger.info(f"[OK] Usuário {usuario.sAMAccountName.value} desativado com sucesso no AD")
+        
+        email = None
+        if usuario.mail and usuario.mail.value:
+            email = str(usuario.mail.value)
+        elif usuario.userPrincipalName and usuario.userPrincipalName.value:
+            email = str(usuario.userPrincipalName.value)
         
         return {
             'cpf': cpf,
             'login': usuario.sAMAccountName.value,
             'nome': nome_usuario,
             'employeeID': usuario.employeeID.value,
+            'mail': email,
             'dn': user_dn,
             'status': 'desativado'
         }
@@ -389,12 +412,13 @@ def desativar_usuario_por_cpf(cpf):
 
 def consultar_email_por_cpf(cpf):
     """Consulta o email de um usuário no AD pelo CPF."""
-    logger.info(f"[EMAIL] Consultando email no AD para CPF: {cpf}")
+    logger.info(f"[EMAIL] Consultando email no AD para CPF: {_mascarar_cpf(cpf)}")
     
     conn = _criar_conexao_ad()
     
     try:
-        search_filter = f"(&(objectClass=user)(employeeID={cpf}))"
+        cpf_sanitizado = escape_filter_chars(cpf)
+        search_filter = f"(&(objectClass=user)(employeeID={cpf_sanitizado}))"
         attributes = ['mail', 'userPrincipalName', 'sAMAccountName']
         
         conn.search(BASE_DN, search_filter, attributes=attributes)
@@ -422,39 +446,44 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
     """Envia email de notificação sobre a desativação do colaborador."""
     logger.info("[EMAIL] Iniciando envio de notificação...")
     
-    server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
-    server.starttls()
-    server.login(EMAIL_CONFIG['username'], EMAIL_CONFIG['password'])
-    
-    logger.info("[OK] [EMAIL] Conexão SMTP estabelecida")
-    
-    cpf_correto = resultado_ad.get('cpf') or dados_colaborador.get('documentos', {}).get('cpf', 'N/A')
-    cpf_formatado = formatar_cpf(cpf_correto)
-    
-    status_sistemas = _obter_status_sistemas(resultado_ad, resultado_sistemas)
-    
-    nome_colaborador = dados_colaborador.get('nome', 'N/A')
-    setor = dados_colaborador.get('departamento', {}).get('nome', 'N/A')
-    cargo = dados_colaborador.get('cargo', {}).get('nome', 'N/A')
-    
-    html_content = _gerar_html_email(
-        nome_colaborador, cpf_formatado, dados_colaborador,
-        setor, cargo, status_sistemas, resultado_ad
-    )
-    
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"NOTIFICAÇÃO: Colaborador Demitido - {nome_colaborador}"
-    msg['From'] = EMAIL_CONFIG['username']
-    msg['To'] = ', '.join(TI_EMAILS)
-    
-    msg.attach(MIMEText(html_content, 'html', 'utf-8'))
-    server.send_message(msg)
-    server.quit()
-    
-    logger.info("[OK] [EMAIL] Email enviado com sucesso!")
-    logger.info(f"[EMAIL] Destinatários: {', '.join(TI_EMAILS)}")
-    
-    return {'status': 'success', 'recipients': TI_EMAILS}
+    smtp = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
+    try:
+        smtp.starttls()
+        smtp.login(EMAIL_CONFIG['username'], EMAIL_CONFIG['password'])
+        
+        logger.info("[OK] [EMAIL] Conexão SMTP estabelecida")
+        
+        cpf_correto = resultado_ad.get('cpf') or dados_colaborador.get('documentos', {}).get('cpf', 'N/A')
+        cpf_formatado = formatar_cpf(cpf_correto)
+        
+        status_sistemas = _obter_status_sistemas(resultado_ad, resultado_sistemas)
+        
+        nome_colaborador = dados_colaborador.get('nome', 'N/A')
+        setor = dados_colaborador.get('departamento', {}).get('nome', 'N/A')
+        cargo = dados_colaborador.get('cargo', {}).get('nome', 'N/A')
+        
+        html_content = _gerar_html_email(
+            nome_colaborador, cpf_formatado, dados_colaborador,
+            setor, cargo, status_sistemas, resultado_ad
+        )
+        
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"NOTIFICAÇÃO: Colaborador Demitido - {nome_colaborador}"
+        msg['From'] = EMAIL_CONFIG['username']
+        msg['To'] = ', '.join(TI_EMAILS)
+        
+        msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+        smtp.send_message(msg)
+        
+        logger.info("[OK] [EMAIL] Email enviado com sucesso!")
+        logger.info(f"[EMAIL] Destinatários: {', '.join(TI_EMAILS)}")
+        
+        return {'status': 'success', 'recipients': TI_EMAILS}
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            pass
 
 
 def _obter_status_sistemas(resultado_ad, resultado_sistemas):
@@ -600,15 +629,14 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
 def processar_demissao_async(dados, cpf):
     """Processa a demissão em background (thread separada)."""
     try:
-        logger.info("🏢 PASSO 1: Desativando usuário no Active Directory...")
+        logger.info("[PASSO 1] Desativando usuário no Active Directory...")
         resultado_ad = None
         usuario_encontrado_ad = True
 
         try:
             resultado_ad = desativar_usuario_por_cpf(cpf)
-            logger.info(f"[OK] Usuário desativado no AD: {resultado_ad}")
+            logger.info(f"[OK] Usuário desativado no AD: {resultado_ad.get('login', 'N/A')}")
         except ValueError as ad_error:
-            # Usuário não encontrado no AD
             if "não encontrado no AD" in str(ad_error):
                 usuario_encontrado_ad = False
                 logger.warning("[AVISO] Usuário não encontrado no AD. Prosseguindo com sistemas que usam somente CPF...")
@@ -621,34 +649,29 @@ def processar_demissao_async(dados, cpf):
                 raise ad_error
 
         nome_completo = dados.get('nome', '')
-        logger.info(f"[NOME] Nome completo: {nome_completo}")
 
         if usuario_encontrado_ad:
-            # Fluxo normal: usuário encontrado no AD
             email_usuario = _obter_email_usuario(resultado_ad, dados, cpf)
-            logger.info(f"[EMAIL] Email capturado: {email_usuario}")
+            logger.info("[EMAIL] Email capturado para o usuário")
 
-            logger.info("[GOOGLE] PASSO 2: Suspendendo usuário no Google Workspace (se habilitado)...")
+            logger.info("[PASSO 2] Suspendendo usuário no Google Workspace (se habilitado)...")
             resultado_google = inativar_email_google_workspace(email_usuario)
-            logger.info(f"[GOOGLE] Resultado: {resultado_google}")
+            logger.info(f"[GOOGLE] Status: {resultado_google.get('status', 'N/A')}")
 
-            logger.info("[RPA] PASSO 3: Desativando usuário nos sistemas externos...")
+            logger.info("[PASSO 3] Desativando usuário nos sistemas externos (paralelo)...")
             resultado_sistemas = _executar_rpas(email_usuario, cpf, nome_completo)
             resultado_sistemas = _anexar_resultado_extra(resultado_sistemas, resultado_google)
 
-            logger.info("[EMAIL] PASSO 4: Enviando email de notificação...")
+            logger.info("[PASSO 4] Enviando email de notificação...")
             try:
                 enviar_email_notificacao(dados, resultado_ad, resultado_sistemas)
                 logger.info("[OK] Email de notificação enviado com sucesso!")
             except Exception as email_error:
-                logger.error(f"[ERRO] ERRO ao enviar email: {str(email_error)}")
+                logger.exception(f"[ERRO] Falha ao enviar email: {email_error}")
         else:
-            # Fluxo parcial: usuário NÃO encontrado no AD
-            # Executa apenas sistemas que não requerem AD (usam somente CPF)
-            logger.info("[RPA] PASSO 2: Executando APENAS sistemas que usam somente CPF...")
-            resultado_sistemas = _executar_rpas_somente_cpf(cpf, nome_completo)
+            logger.info("[PASSO 2] Executando APENAS sistemas que usam somente CPF (paralelo)...")
+            resultado_sistemas = _executar_rpas(None, cpf, nome_completo, somente_cpf=True)
 
-            # Monta resultado_ad com status de não encontrado para o email
             resultado_ad = {
                 'cpf': cpf,
                 'login': 'Não encontrado',
@@ -657,18 +680,17 @@ def processar_demissao_async(dados, cpf):
                 'status': 'nao_encontrado'
             }
 
-            logger.info("[EMAIL] PASSO 3: Enviando email de notificação...")
+            logger.info("[PASSO 3] Enviando email de notificação...")
             try:
                 enviar_email_notificacao(dados, resultado_ad, resultado_sistemas)
                 logger.info("[OK] Email de notificação enviado com sucesso!")
             except Exception as email_error:
-                logger.error(f"[ERRO] ERRO ao enviar email: {str(email_error)}")
+                logger.exception(f"[ERRO] Falha ao enviar email: {email_error}")
 
-        logger.info(f"[OK] Processamento completo para CPF: {cpf}")
+        logger.info(f"[OK] Processamento completo para CPF: {_mascarar_cpf(cpf)}")
 
-        # Log do resultado no arquivo de webhooks
         webhook_logger.info("=" * 80)
-        webhook_logger.info(f"PROCESSAMENTO CONCLUÍDO - CPF: {cpf}")
+        webhook_logger.info(f"PROCESSAMENTO CONCLUÍDO - CPF: {_mascarar_cpf(cpf)}")
         webhook_logger.info(f"Colaborador: {dados.get('nome', 'N/A')}")
         webhook_logger.info(f"AD: {resultado_ad.get('status', 'N/A')}")
         webhook_logger.info(f"Sistemas processados: {resultado_sistemas.get('total_sistemas', 0)}")
@@ -676,7 +698,6 @@ def processar_demissao_async(dados, cpf):
         webhook_logger.info(f"Erros: {resultado_sistemas.get('erros', 0)}")
         webhook_logger.info("=" * 80)
 
-        # Histórico permanente para auditoria de desligamentos.
         registrar_desligamento_csv(
             dados_colaborador=dados,
             cpf=cpf,
@@ -684,8 +705,8 @@ def processar_demissao_async(dados, cpf):
         )
 
     except Exception as e:
-        logger.error(f"[ERRO] Erro no processamento async: {str(e)}")
-        webhook_logger.error(f"ERRO NO PROCESSAMENTO - CPF: {cpf} - {str(e)}")
+        logger.exception(f"[ERRO] Erro no processamento async: {e}")
+        webhook_logger.error(f"ERRO NO PROCESSAMENTO - CPF: {_mascarar_cpf(cpf)} - {e}")
     finally:
         with cpfs_lock:
             if cpf in cpfs_processados:
@@ -764,36 +785,64 @@ def registrar_desligamento_csv(dados_colaborador, cpf, status_processamento='N/A
         logger.error(f"[ERRO] Falha ao gravar histórico de desligamentos CSV: {e}")
 
 
-def _executar_rpas(email_usuario, cpf, nome_completo=None):
-    """Executa todos os RPAs ativos e retorna o resultado consolidado."""
+def _executar_rpas(email_usuario, cpf, nome_completo=None, somente_cpf=False):
+    """Executa todos os RPAs ativos (em paralelo) e retorna o resultado consolidado."""
     resultado = {
         'total_sistemas': 0,
         'sucessos': 0,
         'erros': 0,
+        'skipped': 0,
         'detalhes': [],
+        'sistemas_pulados': [],
         'status_geral': 'sucesso'
     }
     
+    tarefas = []
     for sistema_id, config in SISTEMAS_CONFIG.items():
         if not config['ativo']:
             continue
+        
+        if somente_cpf and config.get('requer_ad', True):
+            resultado['skipped'] += 1
+            resultado['sistemas_pulados'].append({
+                'sistema': config['nome'],
+                'status': 'skipped',
+                'motivo': 'Requer dados do Active Directory'
+            })
+            logger.info(f"[SKIP] {config['nome']} requer AD - pulando...")
+            continue
+        
+        tarefas.append(sistema_id)
+    
+    if not tarefas:
+        return resultado
+    
+    max_paralelo = int(os.getenv('RPA_MAX_PARALELO', 3))
+    logger.info(f"[RPA] Executando {len(tarefas)} sistemas em paralelo (max {max_paralelo} simultâneos)")
+    
+    with ThreadPoolExecutor(max_workers=max_paralelo) as executor:
+        futures = {
+            executor.submit(executar_sistema_rpa, sid, email_usuario, cpf, nome_completo): sid
+            for sid in tarefas
+        }
+        
+        for future in as_completed(futures):
+            sid = futures[future]
+            resultado['total_sistemas'] += 1
+            try:
+                resultado_rpa = future.result()
+            except Exception as e:
+                logger.error(f"[ERRO] Exceção inesperada no RPA {sid}: {e}")
+                resultado_rpa = {'status': 'erro', 'sistema': sid, 'erro': str(e)}
             
-        resultado['total_sistemas'] += 1
-        logger.info(f"[PROC] Processando {config['nome']}...")
-        
-        resultado_rpa = executar_sistema_rpa(sistema_id, email_usuario, cpf, nome_completo)
-        resultado['detalhes'].append(resultado_rpa)
-        
-        if resultado_rpa['status'] == 'sucesso':
-            resultado['sucessos'] += 1
-        elif resultado_rpa['status'] == 'erro':
-            resultado['erros'] += 1
+            resultado['detalhes'].append(resultado_rpa)
+            
+            if resultado_rpa['status'] == 'sucesso':
+                resultado['sucessos'] += 1
+            elif resultado_rpa['status'] == 'erro':
+                resultado['erros'] += 1
     
-    if resultado['erros'] > 0 and resultado['sucessos'] > 0:
-        resultado['status_geral'] = 'parcial'
-    elif resultado['erros'] > 0 and resultado['sucessos'] == 0:
-        resultado['status_geral'] = 'erro'
-    
+    resultado['status_geral'] = _calcular_status_geral(resultado, somente_cpf)
     return resultado
 
 
@@ -808,55 +857,19 @@ def _anexar_resultado_extra(resultado_sistemas, resultado_extra):
     elif status == 'erro':
         resultado_sistemas['erros'] += 1
 
-    if resultado_sistemas['erros'] > 0 and resultado_sistemas['sucessos'] > 0:
-        resultado_sistemas['status_geral'] = 'parcial'
-    elif resultado_sistemas['erros'] > 0 and resultado_sistemas['sucessos'] == 0:
-        resultado_sistemas['status_geral'] = 'erro'
-
+    resultado_sistemas['status_geral'] = _calcular_status_geral(resultado_sistemas)
     return resultado_sistemas
 
 
-def _executar_rpas_somente_cpf(cpf, nome_completo=None):
-    """Executa apenas os RPAs que não requerem AD (usam somente CPF)."""
-    resultado = {
-        'total_sistemas': 0,
-        'sucessos': 0,
-        'erros': 0,
-        'skipped': 0,
-        'detalhes': [],
-        'sistemas_pulados': [],
-        'status_geral': 'parcial'  # Sempre parcial pois não processou todos
-    }
-    
-    for sistema_id, config in SISTEMAS_CONFIG.items():
-        if not config['ativo']:
-            continue
-        
-        # Verifica se o sistema requer AD
-        if config.get('requer_ad', True):
-            # Sistema requer AD, pular e registrar
-            resultado['skipped'] += 1
-            resultado['sistemas_pulados'].append({
-                'sistema': config['nome'],
-                'status': 'skipped',
-                'motivo': 'Requer dados do Active Directory'
-            })
-            logger.info(f"[SKIP] {config['nome']} requer AD - pulando...")
-            continue
-        
-        # Sistema não requer AD, pode executar com CPF
-        resultado['total_sistemas'] += 1
-        logger.info(f"[PROC] Processando {config['nome']} (somente CPF)...")
-        
-        resultado_rpa = executar_sistema_rpa(sistema_id, None, cpf, nome_completo)
-        resultado['detalhes'].append(resultado_rpa)
-        
-        if resultado_rpa['status'] == 'sucesso':
-            resultado['sucessos'] += 1
-        elif resultado_rpa['status'] == 'erro':
-            resultado['erros'] += 1
-    
-    return resultado
+def _calcular_status_geral(resultado, parcial=False):
+    """Determina o status geral com base nos contadores."""
+    if parcial:
+        return 'parcial'
+    if resultado['erros'] > 0 and resultado['sucessos'] > 0:
+        return 'parcial'
+    if resultado['erros'] > 0 and resultado['sucessos'] == 0:
+        return 'erro'
+    return 'sucesso'
 
 
 @app.route('/status', methods=['GET'])
@@ -904,7 +917,7 @@ def consulta_ad():
         data = request.get_json()
         login = data.get('login')
         
-        logger.info(f"🚀 Iniciando consulta AD para login: {login}")
+        logger.info(f"[CONSULTA] Iniciando consulta AD para login: {login}")
         
         if not login:
             return jsonify({'error': 'Informe o login (sAMAccountName)'}), 400
@@ -913,7 +926,8 @@ def consulta_ad():
         logger.info("[OK] Conectado com sucesso no AD")
         
         try:
-            search_filter = f"(&(objectClass=user)(sAMAccountName={login}))"
+            login_sanitizado = escape_filter_chars(login)
+            search_filter = f"(&(objectClass=user)(sAMAccountName={login_sanitizado}))"
             attributes = [
                 'cn', 'displayName', 'givenName', 'sn', 'sAMAccountName',
                 'mail', 'employeeID', 'employeeNumber', 'department',
@@ -953,8 +967,8 @@ def consulta_ad():
             conn.unbind()
         
     except Exception as e:
-        logger.error(f"[ERRO] Erro na consulta AD: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.exception(f"[ERRO] Erro na consulta AD: {e}")
+        return jsonify({'error': 'Erro interno ao consultar Active Directory'}), 500
 
 
 def _obter_employee_id(usuario):
@@ -970,23 +984,27 @@ def _obter_employee_id(usuario):
 def webhook_solides():
     """Recebe e processa webhooks de demissão do Solides."""
     try:
-        # Log do webhook recebido (arquivo separado)
         webhook_logger.info("=" * 80)
         webhook_logger.info(f"WEBHOOK RECEBIDO - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         webhook_logger.info(f"IP Origem: {request.remote_addr}")
-        webhook_logger.info(f"Headers: {dict(request.headers)}")
+        headers_filtrados = {k: ('***' if k.lower() in SENSITIVE_HEADERS else v) for k, v in request.headers.items()}
+        webhook_logger.info(f"Headers: {headers_filtrados}")
         
         logger.info("[WEBHOOK] Webhook recebido do Solides")
         
+        if not WEBHOOK_SECRET:
+            logger.error("[SEGURANCA] WEBHOOK_SECRET não configurado. Rejeitando requisição.")
+            return jsonify({'status': 'erro', 'motivo': 'Servidor não configurado'}), 503
+        
         secret_recebido = request.headers.get('X-Webhook-Secret')
-        if WEBHOOK_SECRET and secret_recebido != WEBHOOK_SECRET:
+        if secret_recebido != WEBHOOK_SECRET:
             logger.warning("[AVISO] Webhook rejeitado - Secret inválido")
             webhook_logger.warning("REJEITADO: Secret inválido")
             return jsonify({'status': 'erro', 'motivo': 'Secret inválido'}), 401
         
         data = request.get_json()
         webhook_logger.info(f"Payload: {json.dumps(data, indent=2, ensure_ascii=False)}")
-        logger.info(f"Body: {json.dumps(data, indent=2)}")
+        logger.info(f"[WEBHOOK] Ação: {data.get('acao', 'N/A')} | Nome: {data.get('dados', {}).get('nome', 'N/A')}")
         
         acao = data.get('acao')
         dados = data.get('dados', {})
@@ -1004,11 +1022,11 @@ def webhook_solides():
             return jsonify({'status': 'erro', 'motivo': 'CPF inválido'}), 400
         
         with cpfs_lock:
+            _limpar_cpfs_antigos()
             if _cpf_ja_processado(cpf):
                 return jsonify({
                     'status': 'ignorado',
-                    'motivo': 'CPF já processado recentemente',
-                    'cpf': cpf
+                    'motivo': 'CPF já processado recentemente'
                 })
 
             cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}
@@ -1023,23 +1041,34 @@ def webhook_solides():
         webhook_logger.info(f"Cargo: {dados.get('cargo', {}).get('nome', 'N/A')}")
         webhook_logger.info("=" * 80)
         
-        logger.info(f"🚨 DEMISSÃO DETECTADA! CPF: {cpf} - {dados.get('nome')}")
+        logger.info(f"[DEMISSAO] Detectada para CPF: {_mascarar_cpf(cpf)} - {dados.get('nome')}")
         
         thread = threading.Thread(target=processar_demissao_async, args=(dados, cpf))
-        thread.daemon = True
+        thread.daemon = False
         thread.start()
         
         return jsonify({
             'status': 'aceito',
             'mensagem': 'Webhook recebido. Processamento iniciado em background.',
-            'cpf': cpf,
             'colaborador': dados.get('nome')
         })
         
     except Exception as error:
-        logger.error(f"[ERRO] Erro no webhook: {str(error)}")
-        webhook_logger.error(f"ERRO NO WEBHOOK: {str(error)}")
-        return jsonify({'status': 'erro', 'erro': str(error)}), 500
+        logger.exception(f"[ERRO] Erro no webhook: {error}")
+        webhook_logger.error(f"ERRO NO WEBHOOK: {error}")
+        return jsonify({'status': 'erro', 'motivo': 'Erro interno no servidor'}), 500
+
+
+def _limpar_cpfs_antigos():
+    """Remove CPFs expirados do cache (deve ser chamada dentro de cpfs_lock)."""
+    agora = datetime.now()
+    expirados = [
+        cpf for cpf, info in cpfs_processados.items()
+        if not info.get('processando')
+        and (agora - info['timestamp']).total_seconds() > TEMPO_BLOQUEIO_DUPLICATA * 2
+    ]
+    for cpf in expirados:
+        del cpfs_processados[cpf]
 
 
 def _cpf_ja_processado(cpf):
@@ -1050,12 +1079,12 @@ def _cpf_ja_processado(cpf):
     ultimo = cpfs_processados[cpf]
 
     if ultimo.get('processando'):
-        logger.warning(f"[AVISO] CPF {cpf} já está em processamento. Ignorando duplicata.")
+        logger.warning(f"[AVISO] CPF {_mascarar_cpf(cpf)} já está em processamento. Ignorando duplicata.")
         return True
 
     tempo_desde = (datetime.now() - ultimo['timestamp']).total_seconds()
     if tempo_desde < TEMPO_BLOQUEIO_DUPLICATA:
-        logger.warning(f"[AVISO] CPF {cpf} já processado há {tempo_desde:.0f}s. Ignorando duplicata.")
+        logger.warning(f"[AVISO] CPF {_mascarar_cpf(cpf)} já processado há {tempo_desde:.0f}s. Ignorando duplicata.")
         return True
 
     return False
@@ -1073,4 +1102,4 @@ if __name__ == '__main__':
     print(f"📊 Status:   http://localhost:{PORT}/status")
     print("=" * 60)
     
-    app.run(host='0.0.0.0', port=PORT, debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
