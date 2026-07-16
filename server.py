@@ -28,6 +28,7 @@ from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
 from ldap3.utils.conv import escape_filter_chars
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CollectorRegistry, CONTENT_TYPE_LATEST
 from google_admin import inativar_email_google_workspace
 
 load_dotenv()
@@ -173,13 +174,6 @@ SISTEMAS_CONFIG = {
         'nome': 'NextQS Manager',
         'requer_ad': True  # Precisa do email do AD
     },
-    'bplus': {
-        'ativo': True,
-        'script': 'rpa_bplus.py',
-        'timeout': 300,
-        'nome': 'B+ Reembolso',
-        'requer_ad': True  # Precisa do email do AD
-    },
     'tasy': {
         'ativo': True,
         'script': 'rpa_tasy.py',
@@ -190,6 +184,26 @@ SISTEMAS_CONFIG = {
 }
 
 app = Flask(__name__)
+
+# Métricas Prometheus
+registry = CollectorRegistry()
+webhook_requests_total = Counter(
+    'webhook_requests_total',
+    'Total de webhooks recebidos',
+    ['status'],
+    registry=registry
+)
+webhook_duration = Histogram(
+    'webhook_duration_seconds',
+    'Tempo de processamento dos webhooks',
+    registry=registry
+)
+server_up = Gauge(
+    'server_up',
+    'Status do servidor (1=up, 0=down)',
+    registry=registry
+)
+server_up.set(1)  # Servidor está online
 
 _cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '').strip()
 CORS(app, resources={
@@ -505,7 +519,6 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
         'giu': STATUS_NAO_EXECUTADO,
         'ged': STATUS_NAO_EXECUTADO,
         'nextqs': STATUS_NAO_EXECUTADO,
-        'bplus': STATUS_NAO_EXECUTADO,
         'tasy': STATUS_NAO_EXECUTADO
     }
     
@@ -528,8 +541,6 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['ged'] = obter_status_formatado(sistema, usar_bloqueado=True)
         elif 'NEXTQS' in nome:
             status['nextqs'] = obter_status_formatado(sistema)
-        elif 'BPLUS' in nome or 'B+' in nome or 'REEMBOLSO' in nome:
-            status['bplus'] = obter_status_formatado(sistema)
         elif 'TASY' in nome:
             status['tasy'] = obter_status_formatado(sistema)
     
@@ -543,8 +554,6 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['saw'] = STATUS_NAO_EXECUTADO
         elif 'GED' in nome or 'BYE' in nome:
             status['ged'] = STATUS_NAO_EXECUTADO
-        elif 'BPLUS' in nome or 'B+' in nome or 'REEMBOLSO' in nome:
-            status['bplus'] = STATUS_NAO_EXECUTADO
         elif 'TASY' in nome:
             status['tasy'] = STATUS_NAO_EXECUTADO
     
@@ -595,7 +604,6 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
                     <tr><td>SAW:</td><td>{status['saw']}</td></tr>
                     <tr><td>GIU Unimed:</td><td>{status['giu']}</td></tr>
                     <tr><td>GED (Bye Bye Paper):</td><td>{status['ged']}</td></tr>
-                    <tr><td>B+ Reembolso:</td><td>{status['bplus']}</td></tr>
                     <tr><td>Tasy EMR:</td><td>{status['tasy']}</td></tr>
                 </table>
             </div>
@@ -875,6 +883,7 @@ def _calcular_status_geral(resultado, parcial=False):
 @app.route('/status', methods=['GET'])
 def status():
     """Retorna o status do servidor."""
+    server_up.set(1)  # Confirma que o servidor está online
     return jsonify({
         'status': 'online',
         'servico': 'Integração Solides - AD + Sistemas',
@@ -884,7 +893,8 @@ def status():
             '/webhook/solides': 'POST - Webhook principal',
             '/consulta-ad': 'POST - Consultar usuário no AD',
             '/sistemas/status': 'GET - Status dos sistemas RPA',
-            '/status': 'GET - Status do serviço'
+            '/status': 'GET - Status do serviço',
+            '/metrics': 'GET - Métricas Prometheus'
         }
     })
 
@@ -983,6 +993,7 @@ def _obter_employee_id(usuario):
 @app.route('/webhook/solides', methods=['POST'])
 def webhook_solides():
     """Recebe e processa webhooks de demissão do Solides."""
+    start_time = datetime.now()
     try:
         webhook_logger.info("=" * 80)
         webhook_logger.info(f"WEBHOOK RECEBIDO - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
@@ -1047,6 +1058,11 @@ def webhook_solides():
         thread.daemon = False
         thread.start()
         
+        # Métricas de sucesso
+        duration = (datetime.now() - start_time).total_seconds()
+        webhook_duration.observe(duration)
+        webhook_requests_total.labels(status='success').inc()
+        
         return jsonify({
             'status': 'aceito',
             'mensagem': 'Webhook recebido. Processamento iniciado em background.',
@@ -1056,6 +1072,12 @@ def webhook_solides():
     except Exception as error:
         logger.exception(f"[ERRO] Erro no webhook: {error}")
         webhook_logger.error(f"ERRO NO WEBHOOK: {error}")
+        
+        # Métricas de erro
+        duration = (datetime.now() - start_time).total_seconds()
+        webhook_duration.observe(duration)
+        webhook_requests_total.labels(status='error').inc()
+        
         return jsonify({'status': 'erro', 'motivo': 'Erro interno no servidor'}), 500
 
 
@@ -1088,6 +1110,12 @@ def _cpf_ja_processado(cpf):
         return True
 
     return False
+
+
+@app.route('/metrics', methods=['GET'])
+def metrics():
+    """Endpoint para métricas Prometheus."""
+    return generate_latest(registry), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 
 if __name__ == '__main__':

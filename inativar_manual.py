@@ -9,7 +9,7 @@ Parâmetros:
     --email     Email corporativo (usado nos demais sistemas)
     --nome      Nome completo (usado no Tasy)
     --sistemas  Lista de sistemas para inativar (opcional, padrão: todos)
-                Opções: ad, crm, saw, giu, ged, bplus, tasy
+                Opções: ad, crm, saw, giu, ged, tasy
     --pular-ad  Pular inativação no Active Directory
 
 Exemplos:
@@ -62,12 +62,11 @@ def print_erro(texto):
 def print_info(texto):
     print(f"{Cores.AZUL}[INFO] {texto}{Cores.RESET}")
 
-# Configuração dos sistemas
 SISTEMAS = {
     'ad': {
         'nome': 'Active Directory',
         'requer': ['cpf'],
-        'script': None  # Tratamento especial
+        'script': None 
     },
     'crm': {
         'nome': 'CRM JMJ',
@@ -88,11 +87,6 @@ SISTEMAS = {
         'nome': 'GED Bye Bye Paper',
         'requer': ['email'],
         'script': 'rpa_ged.py'
-    },
-    'bplus': {
-        'nome': 'B+ Reembolso',
-        'requer': ['email'],
-        'script': 'rpa_bplus.py'
     },
     'tasy': {
         'nome': 'Tasy EMR',
@@ -230,8 +224,6 @@ def processar_sistema(sistema_id, cpf=None, email=None, nome=None):
     elif sistema_id == 'tasy':
         nome_conta = email.split('@')[0] if email else ''
         resultado = executar_rpa(config['script'], [nome, nome_conta])
-    elif sistema_id == 'bplus':
-        resultado = executar_rpa(config['script'], [email])
     else:
         resultado = executar_rpa(config['script'], [email])
     
@@ -349,7 +341,7 @@ Exemplos:
     parser.add_argument('--email', help='Email corporativo')
     parser.add_argument('--nome', help='Nome completo (para Tasy)')
     parser.add_argument('--sistemas', nargs='+', 
-                        choices=['ad', 'crm', 'saw', 'giu', 'ged', 'bplus', 'tasy'],
+                        choices=['ad', 'crm', 'saw', 'giu', 'ged', 'tasy'],
                         help='Sistemas específicos para inativar')
     parser.add_argument('--pular-ad', action='store_true', 
                         help='Pular inativação no Active Directory')
@@ -368,7 +360,7 @@ Exemplos:
     if args.sistemas:
         sistemas_processar = args.sistemas
     else:
-        sistemas_processar = ['ad', 'crm', 'saw', 'giu', 'ged', 'bplus', 'tasy']
+        sistemas_processar = ['ad', 'crm', 'saw', 'giu', 'ged', 'tasy']
     
     if args.pular_ad and 'ad' in sistemas_processar:
         sistemas_processar.remove('ad')

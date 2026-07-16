@@ -18,6 +18,8 @@ __pycache__/
 *.log
 webhook_solides.log
 data/desligamentos_historico.csv
+33.5
+
 
 # IDE
 .vscode/
