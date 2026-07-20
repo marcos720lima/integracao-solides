@@ -142,8 +142,8 @@ ngrok config add-authtoken SEU_TOKEN
 
 Se quiser suspender automaticamente o email do colaborador demitido no Google Workspace:
 
-1. Crie/baixe a Service Account JSON e guarde em caminho seguro (fora do repositório).
-2. Ative **Domain-Wide Delegation** na Service Account.
+1. Crie/baixe a Service Account JSON (Deve ser criado no Cloud Console) e guarde em caminho seguro (fora do repositório).
+2. Ative **Domain-Wide Delegation** na Service Account e também o serviço Admin SDK Api na Biblioteca de APIs.
 3. No Admin Console Google, adicione o **Client ID** da Service Account em:
    - Security > API controls > Domain-wide delegation
 4. Autorize os scopes:
@@ -240,7 +240,7 @@ Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para
 ├── rpa_giu.py             # RPA - GIU Unimed (CPF)
 ├── rpa_ged.py             # RPA - GED Bye Bye Paper (email)
 ├── rpa_nextqs.py          # RPA - NextQS Manager (desativado)
-├── rpa_bplus.py           # RPA - B+ Reembolso (nome de conta)
+├── rpa_bplus.py           # RPA - B+ Reembolso (desativado)
 ├── rpa_tasy.py            # RPA - Tasy EMR (nome completo + nome de conta)
 ├── inspecionar_pagina.py  # Ferramenta para mapear novos sites
 ├── logs/                  # Pasta de logs (criada automaticamente)
@@ -293,7 +293,7 @@ Inativações Realizadas
 ├── GIU Unimed:            Desativado
 ├── GED (Bye Bye Paper):   Bloqueado
 ├── NextQS Manager:        Não executado
-├── B+ Reembolso:          Inativado
+├── B+ Reembolso:          Não executado
 └── Tasy EMR:              Inativado
 
 Ações Recomendadas
