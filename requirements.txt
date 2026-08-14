@@ -11,5 +11,4 @@ waitress==3.0.0
 google-auth
 google-api-python-client
 prometheus-client==0.20.0
-streamlit==1.25.0
 pandas==2.2.2
