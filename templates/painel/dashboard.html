@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+{% block titulo %}Dashboard{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <p>Visão geral dos desligamentos processados pela integração.</p>
+</div>
+
+<div class="cards-row">
+  <div class="card card-stat">
+    <div class="rotulo">Total de desligados</div>
+    <div class="valor">{{ total_desligados }}</div>
+  </div>
+
+  <div class="card card-stat">
+    <div class="rotulo">Demissão em execução</div>
+    <div class="valor" id="valor-execucao">
+      <span class="pulso {{ '' if em_execucao else 'parado' }}" id="pulso-execucao"></span><span id="texto-execucao">{{ 'Processando agora' if em_execucao else 'Nenhuma no momento' }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="card-panel" style="margin-bottom:20px;">
+  <div class="card-panel-header">
+    Top 10 setores com mais desligamentos
+    <div class="cabecalho-grafico-direita">
+      <span class="card-grafico-contagem" id="contagem-grafico"></span>
+      <a href="#" id="link-exportar-excel" class="btn-exportar" download>
+        <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="9.15" y="2.2" width="1.7" height="6.6" rx="0.85" fill="currentColor"/>
+          <path d="M5.6 8.4 10 12.8 14.4 8.4c.5-.5 1.2.2.7.7l-4.5 4.5c-.3.3-.9.3-1.2 0L4.9 9.1c-.5-.5.2-1.2.7-.7Z" fill="currentColor"/>
+          <rect x="2.6" y="14.8" width="14.8" height="2.9" rx="1.45" fill="currentColor" fill-opacity="0.9"/>
+        </svg>
+        Exportar Excel
+      </a>
+    </div>
+  </div>
+
+  <div class="toolbar-historico">
+    <div class="campo-toolbar">
+      <label for="grafico-data-inicio">De</label>
+      <input type="date" id="grafico-data-inicio">
+    </div>
+    <div class="campo-toolbar">
+      <label for="grafico-data-fim">Até</label>
+      <input type="date" id="grafico-data-fim">
+    </div>
+    <button type="button" class="btn-limpar-filtros" id="btn-aplicar-grafico">Aplicar</button>
+    <button type="button" class="btn-limpar-filtros" id="btn-limpar-grafico">Todo o período</button>
+  </div>
+
+  <div id="grafico-setores" class="grafico-colunas">
+    <div class="estado-vazio">Carregando…</div>
+  </div>
+</div>
+
+<div class="card-panel">
+  <div class="card-panel-header">
+    Histórico de desligamentos
+    <span style="font-weight:400; color:var(--text-secondary); font-size:12px;" id="contagem-historico">{{ historico|length }} registro(s) exibido(s)</span>
+  </div>
+
+  {% if historico %}
+  <div class="toolbar-historico">
+    <div class="campo-toolbar campo-busca">
+      <label for="busca-historico">Buscar</label>
+      <input type="text" id="busca-historico" placeholder="Nome do colaborador ou setor…">
+    </div>
+    <div class="campo-toolbar">
+      <label for="ordenar-historico">Ordenar por</label>
+      <select id="ordenar-historico">
+        <option value="recente">Mais recente primeiro</option>
+        <option value="antigo">Mais antigo primeiro</option>
+        <option value="nome-az">Colaborador (A-Z)</option>
+        <option value="nome-za">Colaborador (Z-A)</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="filtro-setor">Setor</label>
+      <select id="filtro-setor">
+        <option value="">Todos os setores</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="filtro-status">Status</label>
+      <select id="filtro-status">
+        <option value="">Todos os status</option>
+        <option value="sucesso">Sucesso</option>
+        <option value="parcial">Parcial</option>
+        <option value="erro">Erro</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="quantidade-historico">Mostrar</label>
+      <select id="quantidade-historico">
+        <option value="15">15</option>
+        <option value="30">30</option>
+        <option value="45">45</option>
+        <option value="60">60</option>
+        <option value="75">75</option>
+        <option value="90">90</option>
+        <option value="120">120</option>
+        <option value="150">150</option>
+        <option value="200">200</option>
+        <option value="300">300</option>
+        <option value="500">500 (máximo)</option>
+      </select>
+    </div>
+    <button type="button" class="btn-limpar-filtros" id="btn-limpar-filtros">Limpar</button>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Registrado em</th>
+          <th>Colaborador</th>
+          <th>CPF</th>
+          <th>Email</th>
+          <th>Setor</th>
+          <th>Cargo</th>
+          <th>Desligamento</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="corpo-historico">
+        {% for linha in historico %}
+        {% set status = linha.status_processamento or 'N/A' %}
+        {% set status_grupo = 'sucesso' if status == 'sucesso' else ('erro' if status == 'erro' else 'parcial') %}
+        <tr data-registrado="{{ linha.data_registro }}" data-nome="{{ (linha.nome_colaborador or '')|lower }}" data-setor="{{ linha.setor or '' }}" data-status="{{ status_grupo }}">
+          <td class="mono">{{ linha.data_registro }}</td>
+          <td>{{ linha.nome_colaborador }}</td>
+          <td class="cpf-mono">{{ linha.cpf_mascarado }}</td>
+          <td>{{ linha.email or '—' }}</td>
+          <td>{{ linha.setor or '—' }}</td>
+          <td>{{ linha.cargo or '—' }}</td>
+          <td class="mono">{{ linha.data_desligamento or '—' }}</td>
+          <td><span class="badge badge-{{ status_grupo }}">{{ status }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="estado-vazio" id="estado-vazio-filtro" style="display:none;">Nenhum registro corresponde aos filtros aplicados.</div>
+  {% else %}
+  <div class="estado-vazio">Nenhum desligamento registrado ainda.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function atualizarExecucao() {
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_status_execucao') }}");
+      const dados = await resposta.json();
+      const pulso = document.getElementById('pulso-execucao');
+      const texto = document.getElementById('texto-execucao');
+      if (dados.em_execucao > 0) {
+        pulso.classList.remove('parado');
+        texto.textContent = dados.em_execucao === 1 ? 'Processando agora' : `${dados.em_execucao} em processamento`;
+      } else {
+        pulso.classList.add('parado');
+        texto.textContent = 'Nenhuma no momento';
+      }
+    } catch (e) { /* silencioso: mantém o último valor conhecido */ }
+  }
+  setInterval(atualizarExecucao, 5000);
+
+  // ---------- Gráfico: top 10 setores com mais desligamentos (colunas) ----------
+  const graficoEl = document.getElementById('grafico-setores');
+  const contagemGraficoEl = document.getElementById('contagem-grafico');
+  const inputInicio = document.getElementById('grafico-data-inicio');
+  const inputFim = document.getElementById('grafico-data-fim');
+  const btnAplicarGrafico = document.getElementById('btn-aplicar-grafico');
+  const btnLimparGrafico = document.getElementById('btn-limpar-grafico');
+  const linkExportar = document.getElementById('link-exportar-excel');
+
+  function atualizarLinkExportar() {
+    if (!linkExportar) return;
+    const parametros = new URLSearchParams();
+    if (inputInicio.value) parametros.set('inicio', inputInicio.value);
+    if (inputFim.value) parametros.set('fim', inputFim.value);
+    linkExportar.href = `{{ url_for('painel.exportar_desligamentos_xlsx') }}?${parametros.toString()}`;
+  }
+
+  async function carregarGrafico() {
+    if (!graficoEl) return;
+    graficoEl.innerHTML = '<div class="estado-vazio">Carregando…</div>';
+    atualizarLinkExportar();
+
+    const parametros = new URLSearchParams();
+    if (inputInicio.value) parametros.set('inicio', inputInicio.value);
+    if (inputFim.value) parametros.set('fim', inputFim.value);
+
+    try {
+      const resposta = await fetch(`{{ url_for('painel.api_desligamentos_por_setor') }}?${parametros.toString()}`);
+      const dados = await resposta.json();
+      renderizarGrafico(dados.setores || []);
+    } catch (e) {
+      graficoEl.innerHTML = '<div class="estado-vazio">Falha ao carregar o gráfico.</div>';
+    }
+  }
+
+  function renderizarGrafico(setores) {
+    if (!setores.length) {
+      graficoEl.innerHTML = '<div class="estado-vazio">Nenhum desligamento no período selecionado.</div>';
+      if (contagemGraficoEl) contagemGraficoEl.textContent = '';
+      return;
+    }
+
+    const maximo = Math.max(...setores.map(s => s.quantidade));
+    graficoEl.innerHTML = setores.map(s => `
+      <div class="coluna-setor">
+        <div class="coluna-setor-valor">${s.quantidade}</div>
+        <div class="coluna-setor-trilho">
+          <div class="coluna-setor-barra" style="height:${Math.max(4, (s.quantidade / maximo * 100)).toFixed(1)}%"></div>
+        </div>
+        <div class="coluna-setor-nome-wrap"><span class="coluna-setor-nome" title="${s.setor}">${s.setor}</span></div>
+      </div>
+    `).join('');
+
+    if (contagemGraficoEl) {
+      const total = setores.reduce((soma, s) => soma + s.quantidade, 0);
+      contagemGraficoEl.textContent = `${total} desligamento(s) no período`;
+    }
+  }
+
+  if (graficoEl) {
+    carregarGrafico();
+    btnAplicarGrafico.addEventListener('click', carregarGrafico);
+    btnLimparGrafico.addEventListener('click', () => {
+      inputInicio.value = '';
+      inputFim.value = '';
+      carregarGrafico();
+    });
+  }
+
+  // ---------- Ordenação + filtro + quantidade exibida (histórico) ----------
+  const corpoTabela = document.getElementById('corpo-historico');
+  const contadorEl = document.getElementById('contagem-historico');
+  const estadoVazioFiltro = document.getElementById('estado-vazio-filtro');
+  const seletorOrdem = document.getElementById('ordenar-historico');
+  const seletorSetor = document.getElementById('filtro-setor');
+  const seletorStatus = document.getElementById('filtro-status');
+  const seletorQuantidade = document.getElementById('quantidade-historico');
+  const campoBusca = document.getElementById('busca-historico');
+  const botaoLimpar = document.getElementById('btn-limpar-filtros');
+
+  function popularSetores() {
+    if (!corpoTabela || !seletorSetor) return;
+    const setores = new Set();
+    corpoTabela.querySelectorAll('tr').forEach(linha => {
+      const setor = linha.dataset.setor;
+      if (setor) setores.add(setor);
+    });
+    Array.from(setores).sort((a, b) => a.localeCompare(b, 'pt-BR')).forEach(setor => {
+      const opcao = document.createElement('option');
+      opcao.value = setor;
+      opcao.textContent = setor;
+      seletorSetor.appendChild(opcao);
+    });
+  }
+
+  function aplicarOrdenacaoEFiltro() {
+    if (!corpoTabela) return;
+    const linhas = Array.from(corpoTabela.querySelectorAll('tr'));
+
+    // 1) ordena (sempre reordena o DOM, mesmo as linhas que serão ocultadas)
+    const ordem = seletorOrdem.value;
+    linhas.sort((a, b) => {
+      if (ordem === 'antigo') return a.dataset.registrado.localeCompare(b.dataset.registrado);
+      if (ordem === 'nome-az') return a.dataset.nome.localeCompare(b.dataset.nome, 'pt-BR');
+      if (ordem === 'nome-za') return b.dataset.nome.localeCompare(a.dataset.nome, 'pt-BR');
+      return b.dataset.registrado.localeCompare(a.dataset.registrado); // recente (padrão)
+    });
+    linhas.forEach(linha => corpoTabela.appendChild(linha));
+
+    // 2) aplica busca (nome ou setor) + setor selecionado + status -> lista de quem "passou"
+    const termoBusca = campoBusca.value.trim().toLowerCase();
+    const setorEscolhido = seletorSetor.value;
+    const statusEscolhido = seletorStatus.value;
+
+    const aprovadas = linhas.filter(linha => {
+      const setorLinha = (linha.dataset.setor || '').toLowerCase();
+      const nomeLinha = linha.dataset.nome || '';
+      const correspondeBusca = !termoBusca || nomeLinha.includes(termoBusca) || setorLinha.includes(termoBusca);
+      return correspondeBusca &&
+        (!setorEscolhido || linha.dataset.setor === setorEscolhido) &&
+        (!statusEscolhido || linha.dataset.status === statusEscolhido);
+    });
+
+    // 3) dentre as aprovadas, respeita a quantidade escolhida em "Mostrar"
+    const quantidade = parseInt(seletorQuantidade.value, 10) || 15;
+    const totalAprovadas = aprovadas.length;
+    const exibidas = new Set(aprovadas.slice(0, quantidade));
+
+    linhas.forEach(linha => {
+      linha.style.display = exibidas.has(linha) ? '' : 'none';
+    });
+
+    if (contadorEl) {
+      contadorEl.textContent = totalAprovadas <= quantidade
+        ? `${totalAprovadas} registro(s) exibido(s)`
+        : `${quantidade} de ${totalAprovadas} registro(s)`;
+    }
+    if (estadoVazioFiltro) estadoVazioFiltro.style.display = totalAprovadas === 0 ? 'block' : 'none';
+  }
+
+  if (corpoTabela) {
+    popularSetores();
+    [seletorOrdem, seletorSetor, seletorStatus, seletorQuantidade].forEach(sel => sel.addEventListener('change', aplicarOrdenacaoEFiltro));
+    campoBusca.addEventListener('input', aplicarOrdenacaoEFiltro);
+    if (botaoLimpar) {
+      botaoLimpar.addEventListener('click', () => {
+        seletorOrdem.value = 'recente';
+        seletorSetor.value = '';
+        seletorStatus.value = '';
+        seletorQuantidade.value = '15';
+        campoBusca.value = '';
+        aplicarOrdenacaoEFiltro();
+      });
+    }
+    aplicarOrdenacaoEFiltro(); // aplica o padrão (15 mais recentes) já na primeira carga
+  }
+</script>
+{% endblock %}

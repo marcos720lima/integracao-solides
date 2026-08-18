@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block titulo %}Inativação manual{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Inativação manual</h1>
+  <p>Use em caso de contingência, quando o fluxo automático via webhook falhar.</p>
+</div>
+
+<div class="card-panel" style="margin-bottom:20px;">
+  <form method="POST" id="form-manual">
+    <div class="form-grid">
+      <div class="campo">
+        <label for="cpf">CPF do colaborador</label>
+        <input type="text" id="cpf" name="cpf" placeholder="Somente números">
+      </div>
+      <div class="campo">
+        <label for="email">Email corporativo</label>
+        <input type="text" id="email" name="email" placeholder="usuario@empresa.com.br">
+      </div>
+      <div class="campo full">
+        <label for="nome">Nome completo (necessário para o Tasy)</label>
+        <input type="text" id="nome" name="nome" placeholder="Nome completo do colaborador">
+      </div>
+
+      <div class="campo full">
+        <label>Sistemas a inativar</label>
+        <div class="checkbox-grid">
+          {% for id_sistema, nome_sistema in sistemas %}
+          <label class="checkbox-item">
+            <input type="checkbox" name="sistemas" value="{{ id_sistema }}" checked>
+            {{ nome_sistema }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="campo full">
+        <div class="opcoes-extra">
+          <label><input type="checkbox" name="registrar_csv" checked> Registrar no histórico de desligamentos</label>
+          <label><input type="checkbox" name="enviar_email"> Enviar email de notificação para o TI</label>
+        </div>
+      </div>
+    </div>
+    <div class="form-footer">
+      <button type="submit" class="btn btn-primario" id="btn-enviar">Iniciar inativação</button>
+    </div>
+  </form>
+</div>
+
+{% if job_id %}
+<div class="card-panel">
+  <div class="card-panel-header">
+    Progresso
+    <span id="status-geral" style="font-weight:400; color:var(--text-secondary); font-size:12px;">acompanhando…</span>
+  </div>
+  <div class="pipeline" id="pipeline"></div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('form-manual').addEventListener('submit', function () {
+    const botao = document.getElementById('btn-enviar');
+    botao.disabled = true;
+    botao.textContent = 'Iniciando…';
+  });
+
+  {% if job_id %}
+  const NOMES_SISTEMAS = {
+    {% for id_sistema, nome_sistema in sistemas %}"{{ id_sistema }}": "{{ nome_sistema }}",{% endfor %}
+  };
+
+  const pipelineEl = document.getElementById('pipeline');
+  const statusGeralEl = document.getElementById('status-geral');
+  const jobId = "{{ job_id }}";
+
+  function renderizarPipeline(job) {
+    pipelineEl.innerHTML = '';
+    for (const sistemaId of job.sistemas) {
+      const resultado = job.resultados[sistemaId] || { status: 'pendente', msg: '' };
+      const node = document.createElement('div');
+      node.className = 'pipeline-node';
+      node.dataset.status = resultado.status;
+
+      const simbolos = {
+        pendente: '·', executando: '…', sucesso: '✓', desativado: '✓', bloqueado: '✓',
+        ja_inativo: '=', pulado: '=', nao_encontrado: '?', erro: '✕'
+      };
+
+      node.innerHTML = `
+        <div class="ponto">${simbolos[resultado.status] ?? '·'}</div>
+        <div class="rotulo">${NOMES_SISTEMAS[sistemaId] || sistemaId}</div>
+        <div class="msg">${resultado.msg || ''}</div>
+      `;
+      pipelineEl.appendChild(node);
+    }
+
+    if (job.concluido) {
+      statusGeralEl.textContent = 'concluído';
+    }
+  }
+
+  async function acompanharJob() {
+    try {
+      const resposta = await fetch(`{{ url_for('painel.api_status_job', job_id='__JOB__') }}`.replace('__JOB__', jobId));
+      const job = await resposta.json();
+      if (job.erro) { statusGeralEl.textContent = job.erro; return; }
+      renderizarPipeline(job);
+      if (!job.concluido) setTimeout(acompanharJob, 2000);
+    } catch (e) {
+      statusGeralEl.textContent = 'falha ao consultar status';
+    }
+  }
+  acompanharJob();
+  {% endif %}
+</script>
+{% endblock %}

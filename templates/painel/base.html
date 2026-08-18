@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block titulo %}Painel{% endblock %} · Integração Solides</title>
+  <script>
+    // Aplica o tema salvo antes da página pintar, pra não piscar claro->escuro
+    (function () {
+      try {
+        var tema = localStorage.getItem('painel-tema');
+        if (tema === 'escuro') document.documentElement.setAttribute('data-theme', 'escuro');
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('painel.static', filename='style.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img src="{{ url_for('painel.static', filename='img/logo_unimed.png') }}" alt="Unimed Oeste do Pará" class="logo-unimed">
+        <div class="titulo">Integração Solides</div>
+        <div class="subtitulo">Painel administrativo · TI</div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="{{ url_for('painel.dashboard') }}" class="{{ 'ativo' if request.endpoint == 'painel.dashboard' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2.4" y="2.4" width="6.4" height="6.4" rx="1.5" fill="currentColor"/>
+              <rect x="11.2" y="2.4" width="6.4" height="6.4" rx="1.5" fill="currentColor"/>
+              <rect x="2.4" y="11.2" width="6.4" height="6.4" rx="1.5" fill="currentColor"/>
+              <rect x="11.2" y="11.2" width="6.4" height="6.4" rx="1.5" fill="currentColor"/>
+            </svg>
+          </span>
+          Dashboard
+        </a>
+        <a href="{{ url_for('painel.logs') }}" class="{{ 'ativo' if request.endpoint == 'painel.logs' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2.5" y="2.2" width="15" height="15.6" rx="2.3" fill="currentColor" fill-opacity="0.22"/>
+              <rect x="5.3" y="6.3" width="9.4" height="1.7" rx="0.85" fill="currentColor"/>
+              <rect x="5.3" y="9.2" width="9.4" height="1.7" rx="0.85" fill="currentColor"/>
+              <rect x="5.3" y="12.1" width="6" height="1.7" rx="0.85" fill="currentColor"/>
+            </svg>
+          </span>
+          Logs do sistema
+        </a>
+        <a href="{{ url_for('painel.webhooks') }}" class="{{ 'ativo' if request.endpoint == 'painel.webhooks' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="9.15" y="2.2" width="1.7" height="6.6" rx="0.85" fill="currentColor"/>
+              <path d="M5.6 8.4 10 12.8 14.4 8.4c.5-.5 1.2.2.7.7l-4.5 4.5c-.3.3-.9.3-1.2 0L4.9 9.1c-.5-.5.2-1.2.7-.7Z" fill="currentColor"/>
+              <rect x="2.6" y="14.8" width="14.8" height="2.9" rx="1.45" fill="currentColor" fill-opacity="0.9"/>
+            </svg>
+          </span>
+          Webhooks
+        </a>
+        <a href="{{ url_for('painel.inativacao_manual') }}" class="{{ 'ativo' if request.endpoint == 'painel.inativacao_manual' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="5.8" y="10.8" width="8.4" height="6.6" rx="2.6" fill="currentColor"/>
+              <rect x="3" y="9.7" width="3.1" height="5.4" rx="1.55" fill="currentColor"/>
+              <rect x="6.6" y="4.6" width="2.1" height="7.6" rx="1.05" fill="currentColor"/>
+              <rect x="9.1" y="3.6" width="2.1" height="8.6" rx="1.05" fill="currentColor"/>
+              <rect x="11.6" y="4.4" width="2.1" height="7.8" rx="1.05" fill="currentColor"/>
+              <rect x="14" y="5.8" width="1.9" height="6.4" rx="0.95" fill="currentColor"/>
+            </svg>
+          </span>
+          Inativação manual
+        </a>
+      </nav>
+
+      <div class="sidebar-user">
+        <div class="nome">{{ session.usuario.nome if session.usuario else '' }}</div>
+        <div class="login">{{ session.usuario.login if session.usuario else '' }}</div>
+
+        <button type="button" class="botao-tema" id="botao-tema" aria-label="Alternar tema claro/escuro">
+          <span class="icon icone-tema-lua">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14.6 11.3c-3.5 1-6.8-1.9-6.5-5.5.1-1 .5-2 1-2.8C5.6 4 3.3 6.9 3.3 10.2c0 4 3.2 7.2 7.2 7.2 3.2 0 5.9-2.1 6.8-5-.8.5-1.7.8-2.7.9z" fill="currentColor"/>
+            </svg>
+          </span>
+          <span class="icon icone-tema-sol">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="10" cy="10" r="3.3" fill="currentColor"/>
+              <g stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                <line x1="10" y1="1.8" x2="10" y2="3.6"/>
+                <line x1="10" y1="16.4" x2="10" y2="18.2"/>
+                <line x1="1.8" y1="10" x2="3.6" y2="10"/>
+                <line x1="16.4" y1="10" x2="18.2" y2="10"/>
+                <line x1="4.3" y1="4.3" x2="5.6" y2="5.6"/>
+                <line x1="14.4" y1="14.4" x2="15.7" y2="15.7"/>
+                <line x1="4.3" y1="15.7" x2="5.6" y2="14.4"/>
+                <line x1="14.4" y1="5.6" x2="15.7" y2="4.3"/>
+              </g>
+            </svg>
+          </span>
+          <span class="texto-tema-claro">Modo escuro</span>
+          <span class="texto-tema-escuro">Modo claro</span>
+        </button>
+
+        <a href="{{ url_for('painel.logout') }}" class="sair">Sair</a>
+      </div>
+    </aside>
+
+    <main class="content">
+      {% with mensagens = get_flashed_messages(with_categories=true) %}
+        {% if mensagens %}
+          {% for categoria, mensagem in mensagens %}
+            <div class="aviso {{ 'aviso-erro' if categoria == 'erro' else 'aviso-sucesso' }}">{{ mensagem }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      {% block conteudo %}{% endblock %}
+    </main>
+  </div>
+
+  {% block scripts %}{% endblock %}
+
+  <script>
+    (function () {
+      var botao = document.getElementById('botao-tema');
+      if (!botao) return;
+      botao.addEventListener('click', function () {
+        var escuroAtivo = document.documentElement.getAttribute('data-theme') === 'escuro';
+        if (escuroAtivo) {
+          document.documentElement.removeAttribute('data-theme');
+          try { localStorage.setItem('painel-tema', 'claro'); } catch (e) {}
+        } else {
+          document.documentElement.setAttribute('data-theme', 'escuro');
+          try { localStorage.setItem('painel-tema', 'escuro'); } catch (e) {}
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

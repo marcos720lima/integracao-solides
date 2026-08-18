@@ -214,6 +214,21 @@ CORS(app, resources={
     }
 })
 
+# Necessário para as sessões de login do painel web (/painel).
+# Defina SECRET_KEY no .env em produção - sem isso, uma chave aleatória é
+# gerada a cada reinício do servidor e todo mundo é deslogado.
+_secret_key = os.getenv('SECRET_KEY')
+if not _secret_key:
+    logger.warning("[AVISO] SECRET_KEY não definida no .env - usando chave temporária (sessões do painel serão perdidas a cada reinício).")
+    _secret_key = os.urandom(32)
+app.secret_key = _secret_key
+
+# Painel web (login via AD + dashboard + logs + inativação manual)
+from painel import painel_bp  # noqa: E402  (import após app/logger para evitar ciclo)
+app.register_blueprint(painel_bp)
+
+from painel.webhooks import registrar_webhook_recebido, marcar_webhook_concluido  # noqa: E402
+
 
 def limpar_cpf(cpf):
     """Remove formatação do CPF, deixando apenas números."""
@@ -712,9 +727,19 @@ def processar_demissao_async(dados, cpf):
             status_processamento=resultado_sistemas.get('status_geral', 'N/A')
         )
 
+        return {
+            'status_geral': resultado_sistemas.get('status_geral', 'N/A'),
+            'resultado_ad': resultado_ad,
+            'resultado_sistemas': resultado_sistemas,
+        }
+
     except Exception as e:
         logger.exception(f"[ERRO] Erro no processamento async: {e}")
         webhook_logger.error(f"ERRO NO PROCESSAMENTO - CPF: {_mascarar_cpf(cpf)} - {e}")
+        return {
+            'status_geral': 'erro',
+            'erro': str(e),
+        }
     finally:
         with cpfs_lock:
             if cpf in cpfs_processados:
@@ -1011,6 +1036,10 @@ def webhook_solides():
         if secret_recebido != WEBHOOK_SECRET:
             logger.warning("[AVISO] Webhook rejeitado - Secret inválido")
             webhook_logger.warning("REJEITADO: Secret inválido")
+            registrar_webhook_recebido(
+                payload=request.get_json(silent=True), ip_origem=request.remote_addr,
+                status='rejeitado', motivo='Secret inválido'
+            )
             return jsonify({'status': 'erro', 'motivo': 'Secret inválido'}), 401
         
         data = request.get_json()
@@ -1022,19 +1051,35 @@ def webhook_solides():
         
         if acao != 'demissao_colaborador':
             logger.info(f"Ação '{acao}' ignorada")
+            registrar_webhook_recebido(
+                payload=data, ip_origem=request.remote_addr, status='ignorado',
+                acao=acao, motivo='Ação diferente de demissao_colaborador'
+            )
             return jsonify({'status': 'ignorado', 'acao_recebida': acao})
         
         cpf_bruto = dados.get('documentos', {}).get('cpf')
         if not cpf_bruto:
+            registrar_webhook_recebido(
+                payload=data, ip_origem=request.remote_addr, status='erro_validacao',
+                acao=acao, nome=dados.get('nome'), motivo='CPF não encontrado'
+            )
             return jsonify({'status': 'erro', 'motivo': 'CPF não encontrado'}), 400
         
         cpf = limpar_cpf(cpf_bruto)
         if not cpf or len(cpf) != 11:
+            registrar_webhook_recebido(
+                payload=data, ip_origem=request.remote_addr, status='erro_validacao',
+                acao=acao, nome=dados.get('nome'), motivo='CPF inválido'
+            )
             return jsonify({'status': 'erro', 'motivo': 'CPF inválido'}), 400
         
         with cpfs_lock:
             _limpar_cpfs_antigos()
             if _cpf_ja_processado(cpf):
+                registrar_webhook_recebido(
+                    payload=data, ip_origem=request.remote_addr, status='duplicata',
+                    acao=acao, cpf=cpf, nome=dados.get('nome'), motivo='CPF já processado recentemente'
+                )
                 return jsonify({
                     'status': 'ignorado',
                     'motivo': 'CPF já processado recentemente'
@@ -1054,7 +1099,16 @@ def webhook_solides():
         
         logger.info(f"[DEMISSAO] Detectada para CPF: {_mascarar_cpf(cpf)} - {dados.get('nome')}")
         
-        thread = threading.Thread(target=processar_demissao_async, args=(dados, cpf))
+        webhook_id = registrar_webhook_recebido(
+            payload=data, ip_origem=request.remote_addr, status='processando',
+            acao=acao, cpf=cpf, nome=dados.get('nome')
+        )
+
+        def _executar_e_registrar(dados=dados, cpf=cpf, webhook_id=webhook_id):
+            resultado = processar_demissao_async(dados, cpf)
+            marcar_webhook_concluido(webhook_id, resultado)
+
+        thread = threading.Thread(target=_executar_e_registrar)
         thread.daemon = False
         thread.start()
         
@@ -1128,6 +1182,7 @@ if __name__ == '__main__':
     print(f"📡 Webhook:  http://localhost:{PORT}/webhook/solides")
     print(f"🔍 Consulta: http://localhost:{PORT}/consulta-ad")
     print(f"📊 Status:   http://localhost:{PORT}/status")
+    print(f"🖥️  Painel:   http://localhost:{PORT}/painel")
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)

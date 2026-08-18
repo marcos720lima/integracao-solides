@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block titulo %}Webhooks{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Webhooks recebidos</h1>
+  <p>Últimas requisições recebidas do Solides, com status de processamento e opção de reprocessar.</p>
+</div>
+
+<div class="card-panel">
+  <div class="card-panel-header">
+    Requisições
+    <span style="font-weight:400; color:var(--text-secondary); font-size:12px;" id="contagem-webhooks">{{ eventos|length }} evento(s)</span>
+  </div>
+
+  {% if eventos %}
+  <div class="lista-webhooks" id="lista-webhooks">
+    {% for evento in eventos %}
+    <div class="webhook-item" data-id="{{ evento.id }}">
+      <button type="button" class="webhook-resumo" onclick="alternarDetalhe('{{ evento.id }}')">
+        <span class="webhook-status">
+          {% set st = evento.status %}
+          <span class="badge badge-{{
+            'sucesso' if st == 'concluido_sucesso'
+            else 'parcial' if st == 'concluido_parcial'
+            else 'erro' if st in ['concluido_erro', 'erro_validacao', 'rejeitado']
+            else 'ja_inativo' if st == 'duplicata'
+            else 'executando' if st == 'processando'
+            else 'pendente'
+          }}">{{ {
+            'concluido_sucesso': 'sucesso',
+            'concluido_parcial': 'parcial',
+            'concluido_erro': 'erro',
+            'erro_validacao': 'erro de validação',
+            'rejeitado': 'rejeitado',
+            'duplicata': 'duplicata',
+            'processando': 'processando',
+            'ignorado': 'ignorado',
+          }.get(st, st) }}</span>
+        </span>
+        <span class="webhook-nome">{{ evento.nome or '—' }}</span>
+        <span class="webhook-cpf mono">{{ evento.cpf_mascarado or '—' }}</span>
+        <span class="webhook-data mono">{{ evento.recebido_em }}</span>
+        {% if evento.reprocessado_de %}<span class="webhook-tag">reprocessamento</span>{% endif %}
+        <span class="webhook-seta">›</span>
+      </button>
+
+      <div class="webhook-detalhe" id="detalhe-{{ evento.id }}" style="display:none;">
+        <div class="webhook-detalhe-grid">
+          <div>
+            <div class="detalhe-rotulo">IP de origem</div>
+            <div class="mono">{{ evento.ip_origem or '—' }}</div>
+          </div>
+          <div>
+            <div class="detalhe-rotulo">Ação</div>
+            <div class="mono">{{ evento.acao or '—' }}</div>
+          </div>
+          {% if evento.motivo %}
+          <div>
+            <div class="detalhe-rotulo">Motivo</div>
+            <div>{{ evento.motivo }}</div>
+          </div>
+          {% endif %}
+          {% if evento.concluido_em %}
+          <div>
+            <div class="detalhe-rotulo">Concluído em</div>
+            <div class="mono">{{ evento.concluido_em }}</div>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if evento.resultado and evento.resultado.resultado_sistemas %}
+        <div class="detalhe-rotulo" style="padding:0 20px;">Resultado por sistema</div>
+        <div class="pipeline" style="padding-top:8px;">
+          {% for item in evento.resultado.resultado_sistemas.detalhes %}
+          <div class="pipeline-node" data-status="{{ item.status }}">
+            <div class="ponto">{{ '✓' if item.status in ['sucesso','desativado','bloqueado'] else ('=' if item.status in ['ja_inativo','pulado','skipped'] else ('?' if item.status == 'nao_encontrado' else ('✕' if item.status == 'erro' else '·'))) }}</div>
+            <div class="rotulo">{{ item.sistema }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if evento.resultado and evento.resultado.erro %}
+        <div class="aviso aviso-erro" style="margin:0 20px 16px;">{{ evento.resultado.erro }}</div>
+        {% endif %}
+
+        <div class="detalhe-rotulo" style="padding:0 20px;">Payload recebido</div>
+        <pre class="payload-json">{{ evento.payload | tojson(indent=2) }}</pre>
+
+        {% if evento.status not in ['ignorado', 'rejeitado'] %}
+        <div class="webhook-acoes">
+          <form method="POST" action="{{ url_for('painel.webhooks_reprocessar', webhook_id=evento.id) }}">
+            <button type="submit" class="btn btn-primario">Reprocessar este webhook</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="estado-vazio">Nenhum webhook recebido ainda.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function alternarDetalhe(id) {
+    const el = document.getElementById('detalhe-' + id);
+    if (!el) return;
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  }
+
+  // Atualiza a lista periodicamente (sem fechar os detalhes já abertos)
+  async function atualizarWebhooks() {
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_webhooks') }}");
+      const dados = await resposta.json();
+      const contador = document.getElementById('contagem-webhooks');
+      if (contador) contador.textContent = `${dados.eventos.length} evento(s)`;
+
+      dados.eventos.forEach(evento => {
+        const item = document.querySelector(`.webhook-item[data-id="${evento.id}"]`);
+        if (!item) return; // eventos novos só aparecem com refresh completo da página
+        const badge = item.querySelector('.webhook-status .badge');
+        if (badge && evento.status === 'processando') {
+          badge.className = 'badge badge-executando';
+          badge.textContent = 'processando';
+        }
+      });
+    } catch (e) { /* silencioso */ }
+  }
+  setInterval(atualizarWebhooks, 4000);
+</script>
+{% endblock %}
