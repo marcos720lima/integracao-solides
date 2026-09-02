@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Entrar · Integração Solides</title>
+  <title>Entrar · Gestão de Identidade e Acesso</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('painel.static', filename='style.css') }}">
@@ -12,7 +12,7 @@
   <div class="login-shell">
     <div class="login-card">
       <img src="{{ url_for('painel.static', filename='img/logo_unimed.png') }}" alt="Unimed Oeste do Pará" class="logo-unimed">
-      <div class="titulo">Integração Solides</div>
+      <div class="titulo">Gestão de Identidade e Acesso</div>
       <div class="subtitulo">Entre com seu usuário do Active Directory (acesso restrito à TI)</div>
 
       {% with mensagens = get_flashed_messages(with_categories=true) %}

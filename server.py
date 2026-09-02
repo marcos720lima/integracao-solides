@@ -180,6 +180,13 @@ SISTEMAS_CONFIG = {
         'timeout': 300,
         'nome': 'Tasy EMR',
         'requer_ad': True  # Precisa do nome/email do AD
+    },
+    'infomed': {
+        'ativo': True,
+        'script': 'rpa_infomed.py',
+        'timeout': 60,
+        'nome': 'Infomed',
+        'requer_ad': True  # Identifica pelo email corporativo (do AD)
     }
 }
 
@@ -214,17 +221,13 @@ CORS(app, resources={
     }
 })
 
-# Necessário para as sessões de login do painel web (/painel).
-# Defina SECRET_KEY no .env em produção - sem isso, uma chave aleatória é
-# gerada a cada reinício do servidor e todo mundo é deslogado.
 _secret_key = os.getenv('SECRET_KEY')
 if not _secret_key:
     logger.warning("[AVISO] SECRET_KEY não definida no .env - usando chave temporária (sessões do painel serão perdidas a cada reinício).")
     _secret_key = os.urandom(32)
 app.secret_key = _secret_key
 
-# Painel web (login via AD + dashboard + logs + inativação manual)
-from painel import painel_bp  # noqa: E402  (import após app/logger para evitar ciclo)
+from painel import painel_bp  # noqa: E402
 app.register_blueprint(painel_bp)
 
 from painel.webhooks import registrar_webhook_recebido, marcar_webhook_concluido  # noqa: E402
@@ -271,7 +274,7 @@ def obter_status_formatado(sistema, usar_bloqueado=False):
     return STATUS_NAO_EXECUTADO
 
 
-def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_completo=None):
+def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_completo=None, acao='desativar'):
     """Executa o script RPA de um sistema específico."""
     config = SISTEMAS_CONFIG.get(sistema_id)
     
@@ -290,17 +293,17 @@ def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_compl
 
     if sistema_id == 'giu' and cpf_usuario:
         parametro = str(cpf_usuario)
-        logger.info(f"[RPA] Executando {nome} para CPF: {cpf_usuario}")
-        cmd_args.append(parametro)
+        logger.info(f"[RPA] Executando {nome} para CPF: {cpf_usuario} (ação: {acao})")
+        cmd_args.extend([parametro, acao])
     elif sistema_id == 'tasy' and nome_completo:
         nome_conta = email_usuario.split('@')[0] if email_usuario else ''
         parametro = str(nome_completo)
-        logger.info(f"[RPA] Executando {nome} para: {nome_completo} ({nome_conta})")
-        cmd_args.extend([parametro, nome_conta])
+        logger.info(f"[RPA] Executando {nome} para: {nome_completo} ({nome_conta}) (ação: {acao})")
+        cmd_args.extend([parametro, nome_conta, acao])
     else:
         parametro = str(email_usuario or '')
-        logger.info(f"[RPA] Executando {nome} para email: {email_usuario}")
-        cmd_args.append(parametro)
+        logger.info(f"[RPA] Executando {nome} para email: {email_usuario} (ação: {acao})")
+        cmd_args.extend([parametro, acao])
     
     if not os.path.exists(script):
         logger.error(f"[ERRO] Script {script} não encontrado")
@@ -1083,6 +1086,17 @@ def webhook_solides():
                 return jsonify({
                     'status': 'ignorado',
                     'motivo': 'CPF já processado recentemente'
+                })
+
+            if _desligamento_ja_registrado(cpf, dados.get('data_demissao', '')):
+                registrar_webhook_recebido(
+                    payload=data, ip_origem=request.remote_addr, status='duplicata',
+                    acao=acao, cpf=cpf, nome=dados.get('nome'),
+                    motivo='Desligamento já registrado no histórico para essa data'
+                )
+                return jsonify({
+                    'status': 'ignorado',
+                    'motivo': 'Desligamento já registrado no histórico para essa data'
                 })
 
             cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block titulo %}Férias{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Férias</h1>
+  <p>Colaboradores com férias registradas no Tangerino.</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="cards-row" style="margin-bottom:20px;">
+  <div class="card card-stat">
+    <div class="rotulo">Em férias agora (nesta página)</div>
+    <div class="valor">{{ total_now }}</div>
+  </div>
+</div>
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <input type="hidden" name="page" value="1">
+    <div class="campo-toolbar">
+      <label for="from">De</label>
+      <input type="date" id="from" name="from" value="{{ from_ }}">
+    </div>
+    <div class="campo-toolbar">
+      <label for="to">Até</label>
+      <input type="date" id="to" name="to" value="{{ to_ }}">
+    </div>
+    <div class="campo-toolbar">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        <option value="" {{ 'selected' if not status }}>Todos</option>
+        <option value="APROVADO" {{ 'selected' if status == 'APROVADO' }}>Aprovado</option>
+        <option value="PENDENTE" {{ 'selected' if status == 'PENDENTE' }}>Pendente</option>
+        <option value="REPROVADO" {{ 'selected' if status == 'REPROVADO' }}>Reprovado</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="size">Por página</label>
+      <select id="size" name="size">
+        {% for opcao in [15, 30, 50, 100, 200] %}
+        <option value="{{ opcao }}" {{ 'selected' if size == opcao }}>{{ opcao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <label class="checkbox-item" style="align-self:flex-end;">
+      <input type="checkbox" name="now" value="1" {{ 'checked' if only_now }}> Somente em férias agora
+    </label>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if rows %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Colaborador</th>
+          <th>Email</th>
+          <th>Início</th>
+          <th>Fim</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for linha in rows %}
+        <tr>
+          <td>{{ linha.name }}</td>
+          <td>{{ linha.email or '—' }}</td>
+          <td class="mono">{{ linha.start_str }}</td>
+          <td class="mono">{{ linha.end_str }}</td>
+          <td>
+            {% set st = linha.status %}
+            <span class="badge badge-{{ 'sucesso' if st == 'APROVADO' else ('erro' if st == 'REPROVADO' else 'parcial') }}">{{ st }}</span>
+            {% if linha.in_now %}<span class="badge badge-executando">em férias agora</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {% if not erro %}<div class="estado-vazio">Nenhum registro de férias encontrado com esses filtros.</div>{% endif %}
+  {% endif %}
+
+  {% if rows %}
+  <div class="paginacao">
+    {% set parametros = request.args.to_dict() %}
+    {% if current_page > 1 %}
+      {% set _ = parametros.update({'page': current_page - 1}) %}
+      <a href="{{ url_for('painel.ferias', **parametros) }}" class="btn-limpar-filtros">‹ Anterior</a>
+    {% endif %}
+    <span class="paginacao-atual">Página {{ current_page }}</span>
+    {% if has_next_page %}
+      {% set _ = parametros.update({'page': current_page + 1}) %}
+      <a href="{{ url_for('painel.ferias', **parametros) }}" class="btn-limpar-filtros">Próxima ›</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

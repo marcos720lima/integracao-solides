@@ -1,0 +1,558 @@
+{% extends "base.html" %}
+{% block titulo %}Colaboradores{% endblock %}
+
+{% block conteudo %}
+<div class="page-header" style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+  <div>
+    <h1>Colaboradores</h1>
+    <p>Admitidos e demitidos, direto da base do Tangerino.</p>
+  </div>
+  <a href="{{ url_for('painel.colaboradores_novo_acesso') }}" class="btn btn-primario" style="white-space:nowrap;">+ Criar acesso</a>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="cards-row" style="margin-bottom:20px;">
+  <div class="card card-stat">
+    <div class="rotulo">
+      Admitidos em {{ ['', 'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'][mes_admissao] }}/{{ ano_admissao }}
+      {% if mes_admissao == mes_atual and ano_admissao == ano_atual %}<span class="badge badge-executando" style="margin-left:6px;">mês atual</span>{% endif %}
+    </div>
+
+    {% if erro_admitidos_mes %}
+    <div class="valor" style="font-size:13px; color:var(--danger);">Indisponível</div>
+    {% else %}
+    <div class="valor">{{ total_admitidos_mes }}</div>
+    {% endif %}
+
+    <form method="GET" class="filtro-mes-ano">
+      <input type="hidden" name="employment_status" value="{{ employment_status }}">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="show_fired" value="{{ '1' if show_fired else '' }}">
+      <input type="hidden" name="sort_by" value="{{ sort_by }}">
+      <input type="hidden" name="sort_dir" value="{{ sort_dir }}">
+      <input type="hidden" name="employee_mode" value="{{ employee_mode }}">
+      <input type="hidden" name="size" value="{{ size }}">
+      <input type="hidden" name="page" value="1">
+
+      <select name="mes">
+        {% for num, nome in [(1,'Janeiro'),(2,'Fevereiro'),(3,'Março'),(4,'Abril'),(5,'Maio'),(6,'Junho'),(7,'Julho'),(8,'Agosto'),(9,'Setembro'),(10,'Outubro'),(11,'Novembro'),(12,'Dezembro')] %}
+        <option value="{{ num }}" {{ 'selected' if num == mes_admissao }}>{{ nome }}</option>
+        {% endfor %}
+      </select>
+      <select name="ano">
+        {% for a in range(ano_atual, ano_atual - 5, -1) %}
+        <option value="{{ a }}" {{ 'selected' if a == ano_admissao }}>{{ a }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn-limpar-filtros">Filtrar</button>
+    </form>
+  </div>
+</div>
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <input type="hidden" name="page" value="1">
+    <input type="hidden" name="mes" value="{{ mes_admissao }}">
+    <input type="hidden" name="ano" value="{{ ano_admissao }}">
+    <div class="campo-toolbar campo-busca">
+      <label for="q">Buscar por</label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Nome ou CPF">
+    </div>
+    <div class="campo-toolbar">
+      <label for="employment_status">Situação</label>
+      <select id="employment_status" name="employment_status">
+        <option value="" {{ 'selected' if not employment_status }}>Todos</option>
+        <option value="EMPREGADO" {{ 'selected' if employment_status == 'EMPREGADO' }}>Admitidos (ativos)</option>
+        <option value="DEMITIDO" {{ 'selected' if employment_status == 'DEMITIDO' }}>Demitidos</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="sort_by">Ordenar por</label>
+      <select id="sort_by" name="sort_by">
+        <option value="name" {{ 'selected' if sort_by == 'name' }}>Nome</option>
+        <option value="workplace" {{ 'selected' if sort_by == 'workplace' }}>Setor</option>
+        <option value="job_role" {{ 'selected' if sort_by == 'job_role' }}>Cargo</option>
+        <option value="admission_date" {{ 'selected' if sort_by == 'admission_date' }}>Data de admissão</option>
+        <option value="dismissal_date" {{ 'selected' if sort_by == 'dismissal_date' }}>Data de demissão</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="sort_dir">Sentido</label>
+      <select id="sort_dir" name="sort_dir">
+        <option value="asc" {{ 'selected' if sort_dir == 'asc' }}>Crescente</option>
+        <option value="desc" {{ 'selected' if sort_dir == 'desc' }}>Decrescente</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="size">Por página</label>
+      <select id="size" name="size">
+        {% for opcao in [15, 30, 50, 100, 200] %}
+        <option value="{{ opcao }}" {{ 'selected' if size == opcao }}>{{ opcao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <label class="checkbox-item" style="align-self:flex-end;">
+      <input type="checkbox" name="show_fired" value="1" {{ 'checked' if show_fired }}> Incluir demitidos na busca
+    </label>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if rows %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>CPF</th>
+          <th>Email</th>
+          <th>Situação</th>
+          <th>Setor</th>
+          <th>Cargo</th>
+          <th>Admissão</th>
+          <th>AD</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for linha in rows %}
+        <tr>
+          <td>{{ linha.name }}</td>
+          <td class="cpf-mono">{{ linha.cpf_formatado or '—' }}</td>
+          <td>{{ linha.email or '—' }}</td>
+          <td>
+            <span class="badge badge-{{ 'sucesso' if linha.employment_status == 'EMPREGADO' else 'erro' }}">{{ linha.employment_status }}</span>
+          </td>
+          <td>{{ linha.workplaces or '—' }}</td>
+          <td>{{ linha.job_role }}</td>
+          <td class="mono">{{ linha.admission_date_str }}</td>
+          <td>
+            {% if linha.cpf %}
+            <button type="button" class="botao-olho" title="Ver acesso no AD" onclick="abrirModalAcesso('{{ linha.cpf }}')">
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+              </svg>
+            </button>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {% if not erro %}<div class="estado-vazio">Nenhum colaborador encontrado com esses filtros.</div>{% endif %}
+  {% endif %}
+
+  {% if rows %}
+  <div class="paginacao">
+    {% set parametros = request.args.to_dict() %}
+    {% if current_page > 1 %}
+      {% set _ = parametros.update({'page': current_page - 1}) %}
+      <a href="{{ url_for('painel.colaboradores', **parametros) }}" class="btn-limpar-filtros">‹ Anterior</a>
+    {% endif %}
+    <span class="paginacao-atual">Página {{ current_page }}</span>
+    {% if has_next_page %}
+      {% set _ = parametros.update({'page': current_page + 1}) %}
+      <a href="{{ url_for('painel.colaboradores', **parametros) }}" class="btn-limpar-filtros">Próxima ›</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-acesso" onclick="fecharModalAcessoFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="modal-nome">—</div>
+        <div class="modal-subtitulo" id="modal-username">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharModalAcesso()">&times;</button>
+    </div>
+
+    <div class="aviso aviso-erro" id="modal-erro-geral" style="display:none; margin:14px 20px 0;"></div>
+
+    <div class="abas" style="padding:0 20px; margin-top:14px;">
+      <button type="button" class="aba ativa" data-aba-modal="info" onclick="trocarAbaModal('info')">Informações</button>
+      <button type="button" class="aba" data-aba-modal="horario" onclick="trocarAbaModal('horario')">Horário</button>
+      <button type="button" class="aba" data-aba-modal="senha" onclick="trocarAbaModal('senha')">Senha</button>
+      <button type="button" class="aba" data-aba-modal="bloqueio" onclick="trocarAbaModal('bloqueio')">Bloqueio</button>
+      <button type="button" class="aba" data-aba-modal="sistemas" onclick="trocarAbaModal('sistemas')">Sistemas</button>
+    </div>
+
+    <div class="modal-corpo">
+      <div id="modal-aba-info" class="modal-secao">
+        <div class="form-grid" style="padding:16px 20px;">
+          <div class="campo"><label>Nome completo</label><div class="mono" id="info-nome">—</div></div>
+          <div class="campo"><label>Nome de usuário</label><div class="mono" id="info-usuario">—</div></div>
+          <div class="campo"><label>Email</label><div class="mono" id="info-email">—</div></div>
+          <div class="campo"><label>CPF</label><div class="mono" id="info-cpf">—</div></div>
+          <div class="campo"><label>Telefone</label><div class="mono" id="info-telefone">—</div></div>
+          <div class="campo"><label>Matrícula</label><div class="mono" id="info-matricula">—</div></div>
+          <div class="campo full"><label>Setor</label><div class="mono" id="info-setor">—</div></div>
+        </div>
+      </div>
+
+      <div id="modal-aba-horario" class="modal-secao" style="display:none;">
+        <div style="padding:16px 20px;">
+          <div class="detalhe-rotulo">Horário atual</div>
+          <div class="mono" id="horario-atual" style="font-size:12px; margin-bottom:16px;">—</div>
+
+          <form id="form-horario-modal" class="form-horario" onsubmit="event.preventDefault(); salvarHorarioModal();">
+            <button type="button" class="btn-limpar-filtros" style="margin-bottom:10px; width:100%; text-align:center;" onclick="predefinirHorarioAdministrativo()">Predefinir horário administrativo</button>
+
+            <select name="edit_mode" class="seletor-modo-horario" onchange="alternarModoHorarioModal(this)" style="margin-bottom:10px;">
+              <option value="todos">Todos os dias</option>
+              <option value="personalizado">Personalizado por dia</option>
+            </select>
+            <div class="modo-todos-dias">
+              <input type="text" name="ranges_all" placeholder="07:00-12:00,14:00-18:00">
+            </div>
+            <div class="modo-personalizado" style="display:none; margin-top:6px;">
+              <input type="text" class="intervalo-dia" name="ranges_seg" placeholder="Segunda: 07:00-12:00,14:00-18:00" disabled>
+              <input type="text" class="intervalo-dia" name="ranges_ter" placeholder="Terça: 07:00-12:00,14:00-18:00" disabled>
+              <input type="text" class="intervalo-dia" name="ranges_qua" placeholder="Quarta: 07:00-12:00,14:00-18:00" disabled>
+              <input type="text" class="intervalo-dia" name="ranges_qui" placeholder="Quinta: 07:00-12:00,14:00-18:00" disabled>
+              <input type="text" class="intervalo-dia" name="ranges_sex" placeholder="Sexta: 07:00-12:00,14:00-18:00" disabled>
+              <input type="text" class="intervalo-dia" name="ranges_sab" placeholder="Sábado: 07:00-12:00,14:00-18:00" disabled>
+              <input type="text" class="intervalo-dia" name="ranges_dom" placeholder="Domingo: 07:00-12:00,14:00-18:00" disabled>
+            </div>
+            <div id="modal-resultado-horario" style="margin-top:10px; font-size:13px;"></div>
+            <button type="submit" class="btn btn-primario" style="margin-top:10px;">Salvar horário</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="modal-aba-senha" class="modal-secao" style="display:none;">
+        <div style="padding:16px 20px;">
+          <p style="font-size:13px; color:var(--text-secondary);">Gera uma nova senha temporária no Active Directory. Isso não altera a senha do Google Workspace.</p>
+          <label class="checkbox-item" style="width:fit-content; margin:10px 0;">
+            <input type="checkbox" id="modal-forcar-troca" checked> Forçar troca de senha no próximo login
+          </label>
+          <div id="modal-resultado-senha" style="margin:10px 0; font-size:13px;"></div>
+          <button type="button" class="btn btn-primario" onclick="redefinirSenha()">Gerar nova senha</button>
+        </div>
+      </div>
+
+      <div id="modal-aba-bloqueio" class="modal-secao" style="display:none;">
+        <div style="padding:16px 20px;">
+          <p style="font-size:13px; color:var(--text-secondary);">Status atual da conta: <span class="badge badge-pendente" id="modal-status-bloqueio">—</span></p>
+          <div id="modal-resultado-bloqueio" style="margin:10px 0; font-size:13px;"></div>
+          <button type="button" class="btn btn-primario" id="btn-bloquear" onclick="alternarBloqueio(true)" style="background:var(--danger);">Bloquear usuário</button>
+          <button type="button" class="btn btn-primario" id="btn-desbloquear" onclick="alternarBloqueio(false)" style="display:none;">Desbloquear usuário</button>
+        </div>
+      </div>
+
+      <div id="modal-aba-sistemas" class="modal-secao" style="display:none;">
+        <div style="padding:16px 20px;">
+          <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">Status do colaborador em cada sistema integrado.</p>
+          <div id="modal-lista-sistemas"><div class="estado-vazio">Carregando…</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let samAtual = null;
+  let cpfAtual = null;
+  let sistemasCarregados = false;
+  let pollingSistemasJobId = null;
+
+  function limparCamposModalAcesso() {
+    samAtual = null;
+    cpfAtual = null;
+    sistemasCarregados = false;
+    pollingSistemasJobId = null;
+    document.getElementById('modal-lista-sistemas').innerHTML = '<div class="estado-vazio">Carregando…</div>';
+
+    document.getElementById('info-nome').textContent = '—';
+    document.getElementById('info-usuario').textContent = '—';
+    document.getElementById('info-email').textContent = '—';
+    document.getElementById('info-cpf').textContent = '—';
+    document.getElementById('info-telefone').textContent = '—';
+    document.getElementById('info-matricula').textContent = '—';
+    document.getElementById('info-setor').textContent = '—';
+
+    document.getElementById('horario-atual').textContent = '—';
+    document.getElementById('modal-resultado-senha').textContent = '';
+    document.getElementById('modal-resultado-horario').textContent = '';
+    document.getElementById('modal-resultado-bloqueio').textContent = '';
+
+    const badge = document.getElementById('modal-status-bloqueio');
+    badge.textContent = '—';
+    badge.className = 'badge badge-pendente';
+    document.getElementById('btn-bloquear').style.display = 'inline-flex';
+    document.getElementById('btn-desbloquear').style.display = 'none';
+
+    const formHorario = document.getElementById('form-horario-modal');
+    formHorario.reset();
+    formHorario.querySelector('.modo-todos-dias').style.display = 'block';
+    formHorario.querySelector('.modo-personalizado').style.display = 'none';
+    formHorario.querySelectorAll('.intervalo-dia').forEach(i => { i.disabled = true; });
+    formHorario.querySelector('input[name="ranges_all"]').disabled = false;
+
+    document.querySelectorAll('[data-aba-modal]').forEach(el => {
+      if (el.dataset.abaModal !== 'info') el.disabled = true;
+    });
+  }
+
+  function habilitarAbasAcaoModal() {
+    document.querySelectorAll('[data-aba-modal]').forEach(el => { el.disabled = false; });
+  }
+
+  async function abrirModalAcesso(cpf) {
+    const modal = document.getElementById('modal-acesso');
+    modal.classList.add('aberto');
+    limparCamposModalAcesso();
+    cpfAtual = cpf;
+    document.getElementById('modal-nome').textContent = 'Carregando…';
+    document.getElementById('modal-username').textContent = '';
+    document.getElementById('modal-erro-geral').style.display = 'none';
+    trocarAbaModal('info');
+
+    try {
+      const resposta = await fetch(`/painel/api/colaboradores/${cpf}/acesso`);
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        document.getElementById('modal-nome').textContent = 'Não encontrado';
+        document.getElementById('modal-erro-geral').style.display = 'block';
+        document.getElementById('modal-erro-geral').textContent = dados.erro || 'Falha ao carregar.';
+        return;
+      }
+
+      const ad = dados.ad;
+      const tg = dados.tangerino || {};
+      samAtual = ad.sam;
+      habilitarAbasAcaoModal();
+
+      document.getElementById('modal-nome').textContent = ad.displayName || '(sem nome)';
+      document.getElementById('modal-username').textContent = ad.sam || '';
+
+      document.getElementById('info-nome').textContent = ad.displayName || '—';
+      document.getElementById('info-usuario').textContent = ad.sam || '—';
+      document.getElementById('info-email').textContent = ad.mail || '—';
+      document.getElementById('info-cpf').textContent = ad.employeeID || '—';
+      document.getElementById('info-telefone').textContent = tg.telefone || '—';
+      document.getElementById('info-matricula').textContent = tg.matricula || '—';
+      document.getElementById('info-setor').textContent = tg.setor || ad.ou || '—';
+
+      const horario = document.getElementById('horario-atual');
+      if (ad.hours && ad.hours['*']) {
+        horario.textContent = ad.hours['*'];
+      } else if (ad.hours) {
+        horario.innerHTML = Object.entries(ad.hours).map(([dia, faixa]) => `${dia}: ${faixa}`).join('<br>');
+      }
+
+      atualizarStatusBloqueio(ad.disabled);
+    } catch (e) {
+      document.getElementById('modal-nome').textContent = 'Falha ao carregar.';
+    }
+  }
+
+  function fecharModalAcesso() {
+    document.getElementById('modal-acesso').classList.remove('aberto');
+    limparCamposModalAcesso();
+  }
+
+  function fecharModalAcessoFora(evento) {
+    if (evento.target.id === 'modal-acesso') fecharModalAcesso();
+  }
+
+  function trocarAbaModal(aba) {
+    document.querySelectorAll('.modal-secao').forEach(el => el.style.display = 'none');
+    document.getElementById(`modal-aba-${aba}`).style.display = 'block';
+    document.querySelectorAll('[data-aba-modal]').forEach(el => el.classList.remove('ativa'));
+    document.querySelector(`[data-aba-modal="${aba}"]`).classList.add('ativa');
+
+    if (aba === 'sistemas' && !sistemasCarregados && cpfAtual) {
+      carregarSistemas();
+    }
+  }
+
+  const ROTULO_STATUS_SISTEMA = {
+    ativo: 'Ativo', inativo: 'Inativo', nao_encontrado: 'Não encontrado',
+    verificando: 'Verificando…', indisponivel: 'Consulta indisponível', erro: 'Erro',
+  };
+  const CLASSE_BADGE_SISTEMA = {
+    ativo: 'sucesso', inativo: 'erro', nao_encontrado: 'pendente',
+    verificando: 'pendente', indisponivel: 'pendente', erro: 'erro',
+  };
+
+  function renderizarLinhaSistema(s) {
+    return `
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border);">
+        <div>
+          <div style="font-size:13px; font-weight:600;">${s.nome}</div>
+          <div style="font-size:11.5px; color:var(--text-muted);">${s.detalhe || ''}</div>
+        </div>
+        <span class="badge badge-${CLASSE_BADGE_SISTEMA[s.status] || 'pendente'}">${ROTULO_STATUS_SISTEMA[s.status] || s.status}</span>
+      </div>`;
+  }
+
+  async function carregarSistemas() {
+    sistemasCarregados = true;
+    const lista = document.getElementById('modal-lista-sistemas');
+    lista.innerHTML = '<div class="estado-vazio">Carregando…</div>';
+
+    try {
+      const resposta = await fetch(`/painel/api/colaboradores/${cpfAtual}/sistemas`);
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        lista.innerHTML = `<div class="aviso aviso-erro">${dados.erro || 'Falha ao carregar.'}</div>`;
+        return;
+      }
+
+      lista.innerHTML = dados.sistemas.map(renderizarLinhaSistema).join('');
+
+      if (dados.job_id) {
+        pollingSistemasJobId = dados.job_id;
+        lista.insertAdjacentHTML('beforeend', '<div id="linhas-sistemas-rpa"></div>');
+        pollarSistemasRpa(dados.job_id);
+      }
+    } catch (e) {
+      lista.innerHTML = '<div class="aviso aviso-erro">Falha ao carregar os sistemas.</div>';
+      sistemasCarregados = false;
+    }
+  }
+
+  async function pollarSistemasRpa(jobId) {
+    if (jobId !== pollingSistemasJobId) return;
+
+    try {
+      const resposta = await fetch(`/painel/api/colaboradores/sistemas-rpa/${jobId}`);
+      const dados = await resposta.json();
+      if (jobId !== pollingSistemasJobId) return;
+
+      const container = document.getElementById('linhas-sistemas-rpa');
+      if (!resposta.ok) {
+        if (container) container.innerHTML = `<div class="aviso aviso-erro">${dados.erro || 'Falha ao consultar os sistemas.'}</div>`;
+        return;
+      }
+
+      if (container) container.innerHTML = dados.sistemas.map(renderizarLinhaSistema).join('');
+
+      if (!dados.concluido) {
+        setTimeout(() => pollarSistemasRpa(jobId), 2000);
+      }
+    } catch (e) {
+      if (jobId === pollingSistemasJobId) setTimeout(() => pollarSistemasRpa(jobId), 3000);
+    }
+  }
+
+  function alternarModoHorarioModal(select) {
+    const form = select.closest('form');
+    const modoTodos = form.querySelector('.modo-todos-dias');
+    const modoPersonalizado = form.querySelector('.modo-personalizado');
+    const inputTodos = form.querySelector('input[name="ranges_all"]');
+    const inputsDias = form.querySelectorAll('.intervalo-dia');
+
+    const personalizado = select.value === 'personalizado';
+    modoTodos.style.display = personalizado ? 'none' : 'block';
+    modoPersonalizado.style.display = personalizado ? 'block' : 'none';
+    if (inputTodos) inputTodos.disabled = personalizado;
+    inputsDias.forEach(i => { i.disabled = !personalizado; });
+  }
+
+  function predefinirHorarioAdministrativo() {
+    const form = document.getElementById('form-horario-modal');
+    const seletor = form.querySelector('select[name="edit_mode"]');
+    seletor.value = 'personalizado';
+    alternarModoHorarioModal(seletor);
+
+    const horarioUtil = '07:00-12:00,14:00-19:00';
+    const horarioSexta = '07:00-12:00,14:00-18:00';
+
+    form.querySelector('input[name="ranges_seg"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_ter"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_qua"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_qui"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_sex"]').value = horarioSexta;
+    form.querySelector('input[name="ranges_sab"]').value = '';
+    form.querySelector('input[name="ranges_dom"]').value = '';
+  }
+
+  async function salvarHorarioModal() {
+    if (!samAtual) return;
+    const form = document.getElementById('form-horario-modal');
+    const dados = new FormData(form);
+    dados.set('sam', samAtual);
+    const resultado = document.getElementById('modal-resultado-horario');
+    resultado.className = '';
+    resultado.textContent = 'Salvando…';
+
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_ad_definir_horario_ajax') }}", { method: 'POST', body: dados });
+      const json = await resposta.json();
+      resultado.className = resposta.ok ? 'aviso aviso-sucesso' : 'aviso aviso-erro';
+      resultado.textContent = resposta.ok ? json.mensagem : json.erro;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao salvar o horário.';
+    }
+  }
+
+  async function redefinirSenha() {
+    if (!samAtual) return;
+    const forcar = document.getElementById('modal-forcar-troca').checked;
+    const resultado = document.getElementById('modal-resultado-senha');
+    resultado.className = '';
+    resultado.textContent = 'Gerando nova senha…';
+
+    const corpo = new URLSearchParams({ sam: samAtual, forcar_troca: forcar ? '1' : '' });
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_ad_redefinir_senha') }}", { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.innerHTML = `Nova senha (só aparece agora): <span class="mono" style="font-weight:700;">${dados.senha}</span>`;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao redefinir a senha.';
+    }
+  }
+
+  async function alternarBloqueio(bloquear) {
+    if (!samAtual) return;
+    const resultado = document.getElementById('modal-resultado-bloqueio');
+    resultado.className = '';
+    resultado.textContent = bloquear ? 'Bloqueando…' : 'Desbloqueando…';
+
+    const corpo = new URLSearchParams({ sam: samAtual, bloquear: bloquear ? '1' : '' });
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_ad_definir_bloqueio') }}", { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      atualizarStatusBloqueio(dados.bloqueado);
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao atualizar o bloqueio.';
+    }
+  }
+
+  function atualizarStatusBloqueio(disabled) {
+    const badge = document.getElementById('modal-status-bloqueio');
+    badge.textContent = disabled ? 'Desativado' : 'Ativo';
+    badge.className = 'badge badge-' + (disabled ? 'erro' : 'sucesso');
+    document.getElementById('btn-bloquear').style.display = disabled ? 'none' : 'inline-flex';
+    document.getElementById('btn-desbloquear').style.display = disabled ? 'inline-flex' : 'none';
+  }
+</script>
+{% endblock %}

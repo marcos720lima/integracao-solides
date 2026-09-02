@@ -1,5 +1,3 @@
-"""Gera a planilha Excel de desligamentos (usada pelo botão "Exportar Excel" do gráfico)."""
-
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -12,13 +10,7 @@ COLUNAS = ["Data do desligamento", "Setor", "Colaborador", "Cargo"]
 
 
 def gerar_planilha_desligamentos(historico, inicio=None, fim=None):
-    """
-    Monta um .xlsx (em memória) com uma linha por colaborador desligado no
-    período informado, colunas: Data do desligamento, Setor, Colaborador, Cargo.
-    Retorna um BytesIO pronto pra ser enviado como download.
-    """
     linhas = filtrar_historico_por_periodo(historico, inicio, fim)
-    # Mais organizado pra leitura em planilha: agrupado por setor, e por data dentro do setor
     linhas.sort(key=lambda linha: (
         (linha.get("setor") or "").strip() or "Não informado",
         linha.get("data_registro") or "",

@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block titulo %}Active Directory{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Active Directory</h1>
+  <p>Busca de usuários no Active Directory e edição do horário permitido de acesso (logonHours).</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <input type="hidden" name="page" value="1">
+    <div class="campo-toolbar campo-busca">
+      <label for="q">Buscar</label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Nome, usuário ou email">
+    </div>
+    <div class="campo-toolbar">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        <option value="todos" {{ 'selected' if status_filter == 'todos' }}>Todos</option>
+        <option value="ativo" {{ 'selected' if status_filter == 'ativo' }}>Ativos</option>
+        <option value="desativado" {{ 'selected' if status_filter == 'desativado' }}>Desativados</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="ou">Setor (OU)</label>
+      <select id="ou" name="ou">
+        <option value="todos" {{ 'selected' if ou_filter == 'todos' }}>Todos os setores</option>
+        {% for opcao in ou_options %}
+        <option value="{{ opcao }}" {{ 'selected' if ou_filter == opcao }}>{{ opcao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo-toolbar">
+      <label for="size">Por página</label>
+      <select id="size" name="size">
+        {% for opcao in [20, 30, 50] %}
+        <option value="{{ opcao }}" {{ 'selected' if size == opcao }}>{{ opcao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if users %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>Usuário</th>
+          <th>Email</th>
+          <th>Status</th>
+          <th>Setor (OU)</th>
+          <th>Horários</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.displayName }}</td>
+          <td class="mono">{{ u.sam }}</td>
+          <td>{{ u.mail or '—' }}</td>
+          <td><span class="badge badge-{{ 'erro' if u.disabled else 'sucesso' }}">{{ 'Desativado' if u.disabled else 'Ativo' }}</span></td>
+          <td>{{ u.ou or '—' }}</td>
+          <td>
+            <button type="button" class="botao-olho" title="Ver/editar horário" onclick='abrirModalHorarioAD({{ u.sam|tojson }}, {{ u.displayName|tojson }}, {{ u.hours|tojson }})'>
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {% if not erro %}<div class="estado-vazio">Nenhum usuário encontrado.</div>{% endif %}
+  {% endif %}
+
+  {% if users %}
+  <div class="paginacao">
+    {% set parametros = request.args.to_dict() %}
+    {% if current_page > 1 %}
+      {% set _ = parametros.update({'page': current_page - 1}) %}
+      <a href="{{ url_for('painel.usuarios_ad', **parametros) }}" class="btn-limpar-filtros">‹ Anterior</a>
+    {% endif %}
+    <span class="paginacao-atual">Página {{ current_page }}</span>
+    {% if has_next_page %}
+      {% set _ = parametros.update({'page': current_page + 1}) %}
+      <a href="{{ url_for('painel.usuarios_ad', **parametros) }}" class="btn-limpar-filtros">Próxima ›</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-horario-ad" onclick="fecharModalHorarioADFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="horario-ad-nome">—</div>
+        <div class="modal-subtitulo" id="horario-ad-sam">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharModalHorarioAD()">&times;</button>
+    </div>
+
+    <div style="padding:16px 20px;">
+      <div class="detalhe-rotulo">Horário atual</div>
+      <div class="mono" id="horario-ad-atual" style="font-size:12px; margin-bottom:16px;">—</div>
+
+      <form id="form-horario-ad" class="form-horario" onsubmit="event.preventDefault(); salvarHorarioAD();">
+        <button type="button" class="btn-limpar-filtros" style="margin-bottom:10px; width:100%; text-align:center;" onclick="predefinirHorarioAdministrativoAD()">Predefinir horário administrativo</button>
+
+        <select name="edit_mode" class="seletor-modo-horario" onchange="alternarModoHorarioAD(this)" style="margin-bottom:10px;">
+          <option value="todos">Todos os dias</option>
+          <option value="personalizado">Personalizado por dia</option>
+        </select>
+        <div class="modo-todos-dias">
+          <input type="text" name="ranges_all" placeholder="07:00-12:00,14:00-18:00">
+        </div>
+        <div class="modo-personalizado" style="display:none;">
+          <input type="text" class="intervalo-dia" name="ranges_seg" placeholder="Segunda: 07:00-12:00,14:00-18:00" disabled>
+          <input type="text" class="intervalo-dia" name="ranges_ter" placeholder="Terça: 07:00-12:00,14:00-18:00" disabled>
+          <input type="text" class="intervalo-dia" name="ranges_qua" placeholder="Quarta: 07:00-12:00,14:00-18:00" disabled>
+          <input type="text" class="intervalo-dia" name="ranges_qui" placeholder="Quinta: 07:00-12:00,14:00-18:00" disabled>
+          <input type="text" class="intervalo-dia" name="ranges_sex" placeholder="Sexta: 07:00-12:00,14:00-18:00" disabled>
+          <input type="text" class="intervalo-dia" name="ranges_sab" placeholder="Sábado: 07:00-12:00,14:00-18:00" disabled>
+          <input type="text" class="intervalo-dia" name="ranges_dom" placeholder="Domingo: 07:00-12:00,14:00-18:00" disabled>
+        </div>
+        <div id="horario-ad-resultado" style="margin-top:10px; font-size:13px;"></div>
+        <button type="submit" class="btn btn-primario" style="margin-top:10px;">Salvar horário</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let horarioAdSamAtual = null;
+
+  function abrirModalHorarioAD(sam, nome, horas) {
+    horarioAdSamAtual = sam;
+    document.getElementById('modal-horario-ad').classList.add('aberto');
+    document.getElementById('horario-ad-nome').textContent = nome;
+    document.getElementById('horario-ad-sam').textContent = sam;
+    document.getElementById('horario-ad-resultado').textContent = '';
+
+    const atual = document.getElementById('horario-ad-atual');
+    if (horas && horas['*']) {
+      atual.textContent = horas['*'];
+    } else if (horas) {
+      atual.innerHTML = Object.entries(horas).map(([dia, faixa]) => `${dia}: ${faixa}`).join('<br>');
+    } else {
+      atual.textContent = '—';
+    }
+
+    const form = document.getElementById('form-horario-ad');
+    form.reset();
+    form.querySelector('.modo-todos-dias').style.display = 'block';
+    form.querySelector('.modo-personalizado').style.display = 'none';
+    form.querySelectorAll('.intervalo-dia').forEach(i => { i.disabled = true; });
+    form.querySelector('input[name="ranges_all"]').disabled = false;
+  }
+
+  function fecharModalHorarioAD() {
+    document.getElementById('modal-horario-ad').classList.remove('aberto');
+    horarioAdSamAtual = null;
+  }
+
+  function fecharModalHorarioADFora(evento) {
+    if (evento.target.id === 'modal-horario-ad') fecharModalHorarioAD();
+  }
+
+  function alternarModoHorarioAD(select) {
+    const form = select.closest('form');
+    const modoTodos = form.querySelector('.modo-todos-dias');
+    const modoPersonalizado = form.querySelector('.modo-personalizado');
+    const inputTodos = form.querySelector('input[name="ranges_all"]');
+    const inputsDias = form.querySelectorAll('.intervalo-dia');
+
+    const personalizado = select.value === 'personalizado';
+    modoTodos.style.display = personalizado ? 'none' : 'block';
+    modoPersonalizado.style.display = personalizado ? 'block' : 'none';
+    if (inputTodos) inputTodos.disabled = personalizado;
+    inputsDias.forEach(i => { i.disabled = !personalizado; });
+  }
+
+  function predefinirHorarioAdministrativoAD() {
+    const form = document.getElementById('form-horario-ad');
+    const seletor = form.querySelector('select[name="edit_mode"]');
+    seletor.value = 'personalizado';
+    alternarModoHorarioAD(seletor);
+
+    const horarioUtil = '07:00-12:00,14:00-19:00';
+    const horarioSexta = '07:00-12:00,14:00-18:00';
+
+    form.querySelector('input[name="ranges_seg"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_ter"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_qua"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_qui"]').value = horarioUtil;
+    form.querySelector('input[name="ranges_sex"]').value = horarioSexta;
+    form.querySelector('input[name="ranges_sab"]').value = '';
+    form.querySelector('input[name="ranges_dom"]').value = '';
+  }
+
+  async function salvarHorarioAD() {
+    if (!horarioAdSamAtual) return;
+    const form = document.getElementById('form-horario-ad');
+    const dados = new FormData(form);
+    dados.set('sam', horarioAdSamAtual);
+    const resultado = document.getElementById('horario-ad-resultado');
+    resultado.className = '';
+    resultado.textContent = 'Salvando…';
+
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_ad_definir_horario_ajax') }}", { method: 'POST', body: dados });
+      const json = await resposta.json();
+      resultado.className = resposta.ok ? 'aviso aviso-sucesso' : 'aviso aviso-erro';
+      resultado.textContent = resposta.ok ? json.mensagem : json.erro;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao salvar o horário.';
+    }
+  }
+</script>
+{% endblock %}

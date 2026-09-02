@@ -1,15 +1,26 @@
 {% extends "base.html" %}
-{% block titulo %}Inativação manual{% endblock %}
+{% block titulo %}Ativação/Inativação manual{% endblock %}
 
 {% block conteudo %}
 <div class="page-header">
-  <h1>Inativação manual</h1>
-  <p>Use em caso de contingência, quando o fluxo automático via webhook falhar.</p>
+  <h1>Ativação/Inativação manual</h1>
+  <p>Use em caso de contingência, quando o fluxo automático via webhook falhar — ou pra reativar alguém manualmente (ex: voltou de férias).</p>
 </div>
 
 <div class="card-panel" style="margin-bottom:20px;">
   <form method="POST" id="form-manual">
     <div class="form-grid">
+      <div class="campo full">
+        <label>Ação</label>
+        <div class="toggle-segmentado" id="toggle-acao">
+          <div class="toggle-segmentado-fundo"></div>
+          <input type="radio" id="acao-inativar" name="acao" value="desativar" checked onchange="alternarAcaoManual()">
+          <label for="acao-inativar">Inativar</label>
+          <input type="radio" id="acao-ativar" name="acao" value="ativar" onchange="alternarAcaoManual()">
+          <label for="acao-ativar">Ativar</label>
+        </div>
+      </div>
+
       <div class="campo">
         <label for="cpf">CPF do colaborador</label>
         <input type="text" id="cpf" name="cpf" placeholder="Somente números">
@@ -24,10 +35,10 @@
       </div>
 
       <div class="campo full">
-        <label>Sistemas a inativar</label>
+        <label id="rotulo-sistemas">Sistemas a inativar</label>
         <div class="checkbox-grid">
           {% for id_sistema, nome_sistema in sistemas %}
-          <label class="checkbox-item">
+          <label class="checkbox-item" data-suporta-ativar="{{ 'sim' if id_sistema in sistemas_suportam_ativar else 'nao' }}">
             <input type="checkbox" name="sistemas" value="{{ id_sistema }}" checked>
             {{ nome_sistema }}
           </label>
@@ -37,7 +48,7 @@
 
       <div class="campo full">
         <div class="opcoes-extra">
-          <label><input type="checkbox" name="registrar_csv" checked> Registrar no histórico de desligamentos</label>
+          <label id="opcao-registrar-csv"><input type="checkbox" name="registrar_csv" checked> Registrar no histórico de desligamentos</label>
           <label><input type="checkbox" name="enviar_email"> Enviar email de notificação para o TI</label>
         </div>
       </div>
@@ -61,6 +72,30 @@
 
 {% block scripts %}
 <script>
+  function alternarAcaoManual() {
+    const ativar = document.querySelector('input[name="acao"]:checked').value === 'ativar';
+    document.getElementById('toggle-acao').dataset.selecionado = ativar ? 'ativar' : 'inativar';
+
+    document.getElementById('rotulo-sistemas').textContent = ativar ? 'Sistemas a ativar' : 'Sistemas a inativar';
+    document.getElementById('btn-enviar').textContent = ativar ? 'Iniciar ativação' : 'Iniciar inativação';
+
+    document.querySelectorAll('[data-suporta-ativar]').forEach(function (label) {
+      const suportado = label.dataset.suportaAtivar === 'sim';
+      const checkbox = label.querySelector('input[type="checkbox"]');
+      const esmaecer = ativar && !suportado;
+      label.style.opacity = esmaecer ? '0.4' : '1';
+      checkbox.disabled = esmaecer;
+      if (esmaecer) checkbox.checked = false;
+      else if (!checkbox.checked) checkbox.checked = true;
+    });
+
+    const opcaoCsv = document.getElementById('opcao-registrar-csv');
+    const checkboxCsv = opcaoCsv.querySelector('input[type="checkbox"]');
+    opcaoCsv.style.opacity = ativar ? '0.4' : '1';
+    checkboxCsv.disabled = ativar;
+    if (ativar) checkboxCsv.checked = false;
+  }
+
   document.getElementById('form-manual').addEventListener('submit', function () {
     const botao = document.getElementById('btn-enviar');
     botao.disabled = true;

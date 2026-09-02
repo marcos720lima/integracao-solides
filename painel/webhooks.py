@@ -1,12 +1,3 @@
-"""
-Registro e reprocessamento dos webhooks recebidos do Solides — alimenta a
-tela /painel/webhooks (inspetor estilo ngrok: lista de requisições, status
-de cada uma, payload bruto e opção de reprocessar).
-
-Guarda os eventos em data/webhooks_recebidos.json (lista, mais recente
-primeiro, limitada a MAX_EVENTOS) para sobreviver a reinícios do servidor.
-"""
-
 import json
 import os
 import threading
@@ -35,7 +26,7 @@ def _garantir_carregado():
             with open(caminho, 'r', encoding='utf-8') as arquivo:
                 _webhooks.extend(json.load(arquivo))
         except Exception:
-            pass  # arquivo corrompido/vazio: segue com lista em memória vazia
+            pass
     _carregado = True
 
 
@@ -45,11 +36,10 @@ def _persistir():
         with open(caminho, 'w', encoding='utf-8') as arquivo:
             json.dump(_webhooks[:MAX_EVENTOS], arquivo, ensure_ascii=False, default=str)
     except Exception:
-        pass  # falha ao persistir não deve derrubar o processamento do webhook
+        pass
 
 
 def registrar_webhook_recebido(payload, ip_origem, status, cpf=None, nome=None, acao=None, motivo=None, reprocessado_de=None):
-    """Cria um novo evento na lista (mais recente primeiro) e retorna seu id."""
     _garantir_carregado()
 
     evento = {
@@ -76,7 +66,6 @@ def registrar_webhook_recebido(payload, ip_origem, status, cpf=None, nome=None, 
 
 
 def marcar_webhook_concluido(webhook_id, resultado):
-    """Atualiza o evento com o resultado do processamento (chamado ao final da thread)."""
     _garantir_carregado()
 
     resultado = resultado or {'status_geral': 'erro', 'erro': 'Sem retorno do processamento'}
@@ -113,11 +102,6 @@ def obter_webhook(webhook_id):
 
 
 def reprocessar_webhook(webhook_id):
-    """
-    Dispara novamente o processamento de um webhook já recebido, usando o
-    payload original armazenado. Cria um NOVO evento (não sobrescreve o
-    antigo) pra manter o histórico de tentativas, igual um "replay".
-    """
     original = obter_webhook(webhook_id)
     if not original:
         raise ValueError('Webhook não encontrado.')
@@ -128,7 +112,6 @@ def reprocessar_webhook(webhook_id):
 
     dados = payload.get('dados', {})
 
-    # Import tardio evita import circular com server.py
     from server import limpar_cpf, cpfs_lock, cpfs_processados, processar_demissao_async
 
     cpf_bruto = dados.get('documentos', {}).get('cpf')
@@ -142,7 +125,6 @@ def reprocessar_webhook(webhook_id):
         motivo='Reprocessamento manual', reprocessado_de=webhook_id,
     )
 
-    # Libera o CPF do bloqueio de duplicata, já que isso é um reprocessamento intencional
     with cpfs_lock:
         cpfs_processados[cpf] = {'timestamp': datetime.now(), 'processando': True}
 

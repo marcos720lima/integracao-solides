@@ -16,8 +16,16 @@ SAW_PASSWORD = os.getenv('SAW_PASSWORD')
 
 SUCESSO = 0
 ERRO = 1
-JA_INATIVO = 2
+JA_NO_ESTADO_DESEJADO = 2
 NAO_ENCONTRADO = 3
+
+ACOES_VALIDAS = {
+    "bloquear": "bloquear",
+    "desativar": "bloquear",
+    "inativar": "bloquear",
+    "desbloquear": "desbloquear",
+    "ativar": "desbloquear",
+}
 
 TENTATIVAS_EXECUCAO = [
     {"headless": False, "usar_chrome": True},
@@ -72,9 +80,9 @@ def _executar_fluxo(page, email_usuario, acao):
         return NAO_ENCONTRADO
 
     if acao == "bloquear" and icone_desativar.count() == 0 and icone_ativar.count() > 0:
-        return JA_INATIVO
+        return JA_NO_ESTADO_DESEJADO
     if acao == "desbloquear" and icone_ativar.count() == 0 and icone_desativar.count() > 0:
-        return JA_INATIVO
+        return JA_NO_ESTADO_DESEJADO
 
     page.evaluate("window.confirm = () => true;")
 
@@ -120,8 +128,9 @@ def _executar_fluxo(page, email_usuario, acao):
     return SUCESSO
 
 
-def executar_saw_automatico(email_usuario, acao='bloquear'):
-    if acao not in ("bloquear", "desbloquear"):
+def executar_saw_automatico(email_usuario, acao='desativar'):
+    acao_normalizada = ACOES_VALIDAS.get((acao or '').lower())
+    if acao_normalizada is None:
         print(f"[SAW] Ação inválida: {acao}", file=sys.stderr)
         return ERRO
 
@@ -139,7 +148,7 @@ def executar_saw_automatico(email_usuario, acao='bloquear'):
                 context = browser.new_context(ignore_https_errors=True)
                 page = context.new_page()
 
-                resultado = _executar_fluxo(page, email_usuario, acao)
+                resultado = _executar_fluxo(page, email_usuario, acao_normalizada)
                 if resultado != ERRO:
                     return resultado
 
@@ -165,13 +174,85 @@ def executar_saw_automatico(email_usuario, acao='bloquear'):
         return ERRO
 
 
+def consultar_status_saw(email_usuario):
+    if not SAW_USERNAME or not SAW_PASSWORD:
+        return ERRO, "SAW_USERNAME/SAW_PASSWORD não definidos no .env."
+
+    with sync_playwright() as p:
+        for indice, tentativa in enumerate(TENTATIVAS_EXECUCAO, start=1):
+            browser = None
+            context = None
+            try:
+                browser = p.chromium.launch(**_opcoes_lancamento(**tentativa))
+                context = browser.new_context(ignore_https_errors=True)
+                page = context.new_page()
+
+                page.goto(f"{SAW_URL}/Logar.do?method=abrirSAW", timeout=60000)
+                page.fill("input[name='j_username']", SAW_USERNAME)
+                page.fill("input[name='j_password']", SAW_PASSWORD)
+                page.click("input#submitForm")
+                page.wait_for_load_state("domcontentloaded", timeout=30000)
+                time.sleep(2)
+
+                page.goto(f"{SAW_URL}/ManterUsuario.do?comando=abrirTelaInicialDeUsuario", timeout=60000)
+                page.wait_for_load_state("domcontentloaded", timeout=30000)
+                time.sleep(2)
+
+                campo = "input[name='filtroDePesquisaDeUsuarios.usuario.email']"
+                page.fill(campo, email_usuario)
+                page.press(campo, "Enter")
+                time.sleep(3)
+
+                icone_desativar = page.locator("img[src*='desativarUsuario']")
+                icone_ativar = page.locator("img[src*='ativarUsuario']")
+
+                if icone_desativar.count() == 0 and icone_ativar.count() == 0:
+                    return NAO_ENCONTRADO, None
+
+                try:
+                    login_usuario = page.locator(
+                        "table#usuarioBean tr:not(:has(th)) td:nth-child(1)"
+                    ).first.inner_text().strip()
+                except Exception:
+                    login_usuario = email_usuario
+
+                if icone_desativar.count() > 0:
+                    return "ativo", login_usuario
+                return "inativo", login_usuario
+
+            except Exception as exc:
+                print(f"[SAW] [status] Tentativa {indice} falhou: {exc}", file=sys.stderr)
+            finally:
+                if context:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                time.sleep(1)
+
+        return ERRO, "Todas as tentativas falharam."
+
+
+def ativar_usuario_saw(email_usuario):
+    return executar_saw_automatico(email_usuario, acao='ativar')
+
+
+def desativar_usuario_saw(email_usuario):
+    return executar_saw_automatico(email_usuario, acao='desativar')
+
+
 if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_saw.py <email_usuario> [bloquear|desbloquear]")
+        print("USO: python rpa_saw.py <email_usuario> [ativar|desativar]")
         sys.exit(1)
 
-    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'desativar'
     resultado = executar_saw_automatico(email, acao)
     sys.exit(resultado)

@@ -1,9 +1,3 @@
-"""
-Executa a inativação manual disparada pelo painel web em uma thread separada,
-reaproveitando a mesma lógica de inativar_manual.py, e mantém o status de cada
-sistema em memória para a tela poder consultar via polling.
-"""
-
 import threading
 import uuid
 from datetime import datetime
@@ -12,8 +6,7 @@ jobs_manuais = {}
 jobs_lock = threading.Lock()
 
 
-def iniciar_job_inativacao(cpf, email, nome, sistemas, enviar_email, registrar_csv, usuario_login):
-    """Cria um novo job de inativação manual e inicia o processamento em background."""
+def iniciar_job_inativacao(cpf, email, nome, sistemas, enviar_email, registrar_csv, usuario_login, acao='desativar'):
     job_id = uuid.uuid4().hex[:12]
 
     job = {
@@ -23,6 +16,7 @@ def iniciar_job_inativacao(cpf, email, nome, sistemas, enviar_email, registrar_c
         "email": email,
         "nome": nome,
         "sistemas": sistemas,
+        "acao": acao,
         "iniciado_em": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         "concluido": False,
         "resultados": {sid: {"status": "pendente", "msg": ""} for sid in sistemas},
@@ -33,7 +27,7 @@ def iniciar_job_inativacao(cpf, email, nome, sistemas, enviar_email, registrar_c
 
     thread = threading.Thread(
         target=_executar_job,
-        args=(job_id, cpf, email, nome, sistemas, enviar_email, registrar_csv),
+        args=(job_id, cpf, email, nome, sistemas, enviar_email, registrar_csv, acao),
         daemon=True,
     )
     thread.start()
@@ -41,8 +35,7 @@ def iniciar_job_inativacao(cpf, email, nome, sistemas, enviar_email, registrar_c
     return job_id
 
 
-def _executar_job(job_id, cpf, email, nome, sistemas, enviar_email, registrar_csv):
-    # Import tardio evita import circular com server.py
+def _executar_job(job_id, cpf, email, nome, sistemas, enviar_email, registrar_csv, acao='desativar'):
     from inativar_manual import processar_sistema, enviar_email_notificacao_manual
 
     resultados = {}
@@ -52,7 +45,7 @@ def _executar_job(job_id, cpf, email, nome, sistemas, enviar_email, registrar_cs
             jobs_manuais[job_id]["resultados"][sistema_id]["status"] = "executando"
 
         try:
-            resultado = processar_sistema(sistema_id, cpf=cpf, email=email, nome=nome)
+            resultado = processar_sistema(sistema_id, cpf=cpf, email=email, nome=nome, acao=acao)
         except Exception as e:
             resultado = {"status": "erro", "msg": str(e)}
 
@@ -64,7 +57,7 @@ def _executar_job(job_id, cpf, email, nome, sistemas, enviar_email, registrar_cs
                 "msg": resultado.get("msg", ""),
             }
 
-    if registrar_csv:
+    if registrar_csv and acao == 'desativar':
         try:
             from server import registrar_desligamento_csv
 
@@ -81,7 +74,7 @@ def _executar_job(job_id, cpf, email, nome, sistemas, enviar_email, registrar_cs
                 "matricula": "N/A",
                 "data_demissao": datetime.now().strftime("%d/%m/%Y"),
             }
-            registrar_desligamento_csv(dados_colaborador, cpf, status_processamento=f"manual-{status_geral}")
+            registrar_desligamento_csv(dados_colaborador, cpf, status_processamento=f"manual-{acao}-{status_geral}")
         except Exception as e:
             with jobs_lock:
                 jobs_manuais[job_id]["erro_csv"] = str(e)

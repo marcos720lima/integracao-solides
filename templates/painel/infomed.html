@@ -1,0 +1,344 @@
+{% extends "base.html" %}
+{% block titulo %}Infomed{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Infomed</h1>
+  <p>Busca direta no banco do Infomed — ativar, inativar e corrigir preferências de usuário.</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <div class="campo-toolbar campo-busca">
+      <label for="q">Buscar por código, nome ou email</label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Ex: jeferson">
+    </div>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if q and usuarios %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Código</th>
+          <th>Nome</th>
+          <th>Email</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in usuarios %}
+        <tr>
+          <td class="mono">{{ u.codigo }}</td>
+          <td>{{ u.nome }}</td>
+          <td>{{ u.email or '—' }}</td>
+          <td><span class="badge badge-{{ 'sucesso' if u.ativo else 'erro' }}">{{ 'Ativo' if u.ativo else 'Inativo' }}</span></td>
+          <td>
+            <button type="button" class="botao-olho" title="Gerenciar" onclick="abrirModalInfomed('{{ u.codigo }}')">
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif q and not erro %}
+  <div class="estado-vazio">Nenhum usuário encontrado.</div>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-infomed" onclick="fecharModalInfomedFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="infomed-modal-nome">—</div>
+        <div class="modal-subtitulo" id="infomed-modal-codigo">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharModalInfomed()">&times;</button>
+    </div>
+
+    <div class="aviso aviso-erro" id="infomed-modal-erro" style="display:none; margin:14px 20px 0;"></div>
+
+    <div class="abas" style="padding:0 20px; margin-top:14px;">
+      <button type="button" class="aba ativa" data-aba-infomed="dados" onclick="trocarAbaInfomed('dados')">Dados básicos</button>
+      <button type="button" class="aba" data-aba-infomed="preferencias" onclick="trocarAbaInfomed('preferencias')">Preferências</button>
+      <button type="button" class="aba" data-aba-infomed="perfis" onclick="trocarAbaInfomed('perfis')">Perfis</button>
+    </div>
+
+    <div id="infomed-aba-dados" class="modal-secao">
+      <div style="padding:16px 20px;">
+        <div class="form-horario" style="margin-bottom:16px;">
+          <label for="infomed-nome">Nome</label>
+          <input type="text" id="infomed-nome">
+
+          <label for="infomed-email" style="margin-top:8px; display:block;">Email</label>
+          <input type="text" id="infomed-email">
+
+          <div id="infomed-resultado-dados" style="margin:10px 0; font-size:13px;"></div>
+          <button type="button" class="btn btn-primario" onclick="infomedSalvarDados()">Salvar dados</button>
+        </div>
+
+        <hr style="border-color:var(--border); margin:18px 0;">
+
+        <p style="font-size:13px; color:var(--text-secondary);">Status: <span class="badge badge-pendente" id="infomed-status-atual">—</span></p>
+        <div id="infomed-resultado-status" style="margin:8px 0; font-size:13px;"></div>
+        <button type="button" class="btn btn-primario" id="infomed-btn-ativar" onclick="infomedDefinirAtivo(true)">Ativar</button>
+        <button type="button" class="btn btn-primario" id="infomed-btn-inativar" onclick="infomedDefinirAtivo(false)" style="background:var(--danger);">Inativar</button>
+      </div>
+    </div>
+
+    <div id="infomed-aba-preferencias" class="modal-secao" style="display:none;">
+      <div style="padding:16px 20px;">
+        <div class="form-horario">
+          <label for="infomed-dias-expiracao">Dias p/ Expiração da senha</label>
+          <input type="number" id="infomed-dias-expiracao" min="1">
+
+          <label for="infomed-tentativas-login" style="margin-top:8px; display:block;">Tentativas de Login Mal-Sucedidas</label>
+          <input type="number" id="infomed-tentativas-login" min="0">
+
+          <label for="infomed-salvar-preferencias" style="margin-top:8px; display:block;">Salvar Preferências</label>
+          <select id="infomed-salvar-preferencias">
+            <option value="1">Sim</option>
+            <option value="0">Não</option>
+          </select>
+
+          <div id="infomed-resultado-preferencias" style="margin:10px 0; font-size:13px;"></div>
+          <button type="button" class="btn btn-primario" onclick="infomedSalvarPreferencias()" style="margin-top:4px;">Salvar preferências</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="infomed-aba-perfis" class="modal-secao" style="display:none;">
+      <div style="padding:16px 20px;">
+        <div id="infomed-lista-perfis" style="margin-bottom:10px; font-size:13px;">—</div>
+        <p style="font-size:11.5px; color:var(--text-muted); margin-bottom:10px;">Clica num perfil pra ativar/desativar.</p>
+
+        <div style="display:flex; gap:8px;">
+          <select id="infomed-select-perfil" style="flex:1; border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; font-size:12px; font-family:var(--font-ui); color:var(--text-primary); background:var(--card-bg);">
+            {% for codigo, nome in perfis_disponiveis %}
+            <option value="{{ codigo }}">{{ nome }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" class="btn btn-primario" onclick="infomedAdicionarPerfil()">Adicionar</button>
+        </div>
+        <div id="infomed-resultado-perfil" style="margin:8px 0; font-size:13px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let infomedCodigoAtual = null;
+
+  function trocarAbaInfomed(aba) {
+    document.querySelectorAll('#modal-infomed .modal-secao').forEach(el => el.style.display = 'none');
+    document.getElementById(`infomed-aba-${aba}`).style.display = 'block';
+    document.querySelectorAll('[data-aba-infomed]').forEach(el => el.classList.remove('ativa'));
+    document.querySelector(`[data-aba-infomed="${aba}"]`).classList.add('ativa');
+  }
+
+  async function abrirModalInfomed(codigo) {
+    infomedCodigoAtual = codigo;
+    trocarAbaInfomed('dados');
+    const modal = document.getElementById('modal-infomed');
+    modal.classList.add('aberto');
+    document.getElementById('infomed-modal-nome').textContent = 'Carregando…';
+    document.getElementById('infomed-modal-codigo').textContent = '';
+    document.getElementById('infomed-modal-erro').style.display = 'none';
+    document.getElementById('infomed-resultado-status').textContent = '';
+    document.getElementById('infomed-resultado-preferencias').textContent = '';
+    document.getElementById('infomed-resultado-dados').textContent = '';
+    document.getElementById('infomed-resultado-perfil').textContent = '';
+    document.getElementById('infomed-lista-perfis').textContent = '—';
+
+    try {
+      const resposta = await fetch(`/painel/api/infomed/usuario/${codigo}`);
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        document.getElementById('infomed-modal-nome').textContent = 'Não encontrado';
+        document.getElementById('infomed-modal-erro').style.display = 'block';
+        document.getElementById('infomed-modal-erro').textContent = dados.erro || 'Falha ao carregar.';
+        return;
+      }
+
+      document.getElementById('infomed-modal-nome').textContent = dados.nome || '(sem nome)';
+      document.getElementById('infomed-modal-codigo').textContent = dados.codigo || '';
+      document.getElementById('infomed-nome').value = dados.nome || '';
+      document.getElementById('infomed-email').value = dados.email || '';
+      atualizarStatusInfomed(dados.ativo);
+
+      const listaPerfis = document.getElementById('infomed-lista-perfis');
+      if (dados.perfis && dados.perfis.length) {
+        listaPerfis.innerHTML = dados.perfis.map(p => {
+          const rotulo = p.nome ? p.nome : `Perfil #${p.codigo}`;
+          const badge = p.ativo ? 'sucesso' : 'pendente';
+          return `<span class="badge badge-${badge}" style="margin:0 6px 6px 0; display:inline-block; cursor:pointer;" onclick="infomedAlternarPerfil(${p.codigo}, ${!p.ativo})" title="Clica pra ${p.ativo ? 'desativar' : 'ativar'}">${rotulo}</span>`;
+        }).join('');
+      } else {
+        listaPerfis.textContent = 'Sem perfis vinculados.';
+      }
+
+      document.getElementById('infomed-dias-expiracao').value = dados.dias_expiracao_senha ?? '';
+      document.getElementById('infomed-tentativas-login').value = dados.tentativas_login ?? '';
+      document.getElementById('infomed-salvar-preferencias').value = dados.salvar_preferencias ? '1' : '0';
+    } catch (e) {
+      document.getElementById('infomed-modal-nome').textContent = 'Falha ao carregar.';
+    }
+  }
+
+  function fecharModalInfomed() {
+    document.getElementById('modal-infomed').classList.remove('aberto');
+    infomedCodigoAtual = null;
+  }
+
+  function fecharModalInfomedFora(evento) {
+    if (evento.target.id === 'modal-infomed') fecharModalInfomed();
+  }
+
+  function atualizarStatusInfomed(ativo) {
+    const badge = document.getElementById('infomed-status-atual');
+    badge.textContent = ativo ? 'Ativo' : 'Inativo';
+    badge.className = 'badge badge-' + (ativo ? 'sucesso' : 'erro');
+    document.getElementById('infomed-btn-ativar').style.display = ativo ? 'none' : 'inline-flex';
+    document.getElementById('infomed-btn-inativar').style.display = ativo ? 'inline-flex' : 'none';
+  }
+
+  async function recarregarPerfisInfomed() {
+    if (!infomedCodigoAtual) return;
+    try {
+      const resposta = await fetch(`/painel/api/infomed/usuario/${infomedCodigoAtual}`);
+      const dados = await resposta.json();
+      if (!resposta.ok) return;
+
+      const listaPerfis = document.getElementById('infomed-lista-perfis');
+      if (dados.perfis && dados.perfis.length) {
+        listaPerfis.innerHTML = dados.perfis.map(p => {
+          const rotulo = p.nome ? p.nome : `Perfil #${p.codigo}`;
+          const badge = p.ativo ? 'sucesso' : 'pendente';
+          return `<span class="badge badge-${badge}" style="margin:0 6px 6px 0; display:inline-block; cursor:pointer;" onclick="infomedAlternarPerfil(${p.codigo}, ${!p.ativo})" title="Clica pra ${p.ativo ? 'desativar' : 'ativar'}">${rotulo}</span>`;
+        }).join('');
+      } else {
+        listaPerfis.textContent = 'Sem perfis vinculados.';
+      }
+    } catch (e) {}
+  }
+
+  async function infomedAlternarPerfil(perCodigo, novoAtivo) {
+    if (!infomedCodigoAtual) return;
+    const resultado = document.getElementById('infomed-resultado-perfil');
+    resultado.className = '';
+    resultado.textContent = 'Atualizando…';
+
+    const corpo = new URLSearchParams({ per_codigo: perCodigo, ativo: novoAtivo ? '1' : '' });
+    try {
+      const resposta = await fetch(`/painel/api/infomed/usuario/${infomedCodigoAtual}/perfil`, { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      recarregarPerfisInfomed();
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao atualizar o perfil.';
+    }
+  }
+
+  function infomedAdicionarPerfil() {
+    const select = document.getElementById('infomed-select-perfil');
+    infomedAlternarPerfil(parseInt(select.value, 10), true);
+  }
+
+  async function infomedSalvarDados() {
+    if (!infomedCodigoAtual) return;
+    const resultado = document.getElementById('infomed-resultado-dados');
+    resultado.className = '';
+    resultado.textContent = 'Salvando…';
+
+    const corpo = new URLSearchParams({
+      nome: document.getElementById('infomed-nome').value,
+      email: document.getElementById('infomed-email').value,
+    });
+
+    try {
+      const resposta = await fetch(`/painel/api/infomed/usuario/${infomedCodigoAtual}/dados`, { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      document.getElementById('infomed-modal-nome').textContent = dados.nome;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao salvar os dados.';
+    }
+  }
+
+  async function infomedDefinirAtivo(ativo) {
+    if (!infomedCodigoAtual) return;
+    const resultado = document.getElementById('infomed-resultado-status');
+    resultado.className = '';
+    resultado.textContent = ativo ? 'Ativando…' : 'Inativando…';
+
+    const corpo = new URLSearchParams({ ativo: ativo ? '1' : '' });
+    try {
+      const resposta = await fetch(`/painel/api/infomed/usuario/${infomedCodigoAtual}/ativo`, { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      atualizarStatusInfomed(dados.ativo);
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao atualizar.';
+    }
+  }
+
+  async function infomedSalvarPreferencias() {
+    if (!infomedCodigoAtual) return;
+    const resultado = document.getElementById('infomed-resultado-preferencias');
+    resultado.className = '';
+    resultado.textContent = 'Salvando…';
+
+    const corpo = new URLSearchParams({
+      dias_expiracao_senha: document.getElementById('infomed-dias-expiracao').value,
+      tentativas_login: document.getElementById('infomed-tentativas-login').value,
+      salvar_preferencias: document.getElementById('infomed-salvar-preferencias').value === '1' ? '1' : '',
+    });
+
+    try {
+      const resposta = await fetch(`/painel/api/infomed/usuario/${infomedCodigoAtual}/preferencias`, { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      resultado.className = resposta.ok ? 'aviso aviso-sucesso' : 'aviso aviso-erro';
+      resultado.textContent = resposta.ok ? dados.mensagem : dados.erro;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao salvar preferências.';
+    }
+  }
+</script>
+{% endblock %}

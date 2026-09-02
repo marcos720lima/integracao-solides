@@ -17,8 +17,19 @@ CRM_PASSWORD = os.getenv('CRM_PASSWORD')
 
 SUCESSO = 0
 ERRO = 1
-JA_INATIVO = 2
+JA_NO_ESTADO_DESEJADO = 2
 NAO_ENCONTRADO = 3
+
+ACOES_VALIDAS = {
+    "bloquear": "bloquear",
+    "desativar": "bloquear",
+    "inativar": "bloquear",
+    "desbloquear": "desbloquear",
+    "ativar": "desbloquear",
+}
+
+ATIVO_STATUS = "ativo"
+INATIVO_STATUS = "inativo"
 
 TENTATIVAS_EXECUCAO = [
     # Em VM, Chrome pode consumir mais memória e cair com "Out of Memory".
@@ -287,9 +298,9 @@ def _executar_fluxo(page, email_usuario, acao):
         toggle_class = toggle.get_attribute("class") or ""
         desligado = "off" in toggle_class.lower() or "inactive" in toggle_class.lower()
         if acao == "bloquear" and desligado:
-            return JA_INATIVO
+            return JA_NO_ESTADO_DESEJADO
         if acao == "desbloquear" and not desligado:
-            return JA_INATIVO
+            return JA_NO_ESTADO_DESEJADO
     except Exception:
         pass
 
@@ -308,8 +319,199 @@ def _executar_fluxo(page, email_usuario, acao):
     return SUCESSO
 
 
-def executar_crm_automatico(email_usuario, acao='bloquear'):
-    if acao not in ("bloquear", "desbloquear"):
+def _consultar_fluxo_status(page, email_usuario):
+    """Igual a _executar_fluxo até localizar o usuário e ler o status - NUNCA clica no toggle nem salva."""
+    nome_usuario = email_usuario.split("@")[0].replace(".", " ").lower()
+
+    def _route_bloqueio(route):
+        try:
+            if route.request.resource_type == "media":
+                return route.abort()
+            return route.continue_()
+        except Exception:
+            return route.continue_()
+
+    try:
+        page.route("**/*", _route_bloqueio)
+    except Exception:
+        pass
+
+    _log(f"[status] Abrindo login: {CRM_URL}/#/authenticate")
+    page.goto(f"{CRM_URL}/#/authenticate", wait_until="domcontentloaded", timeout=120000)
+    page.wait_for_load_state("domcontentloaded", timeout=60000)
+    time.sleep(3)
+
+    campo_usuario = _first_visible(
+        page,
+        [
+            "input[ng-model='credentials.username']", "input[name='username']", "input[name='usuario']",
+            "input[type='email']", "input[placeholder*='Usu']", "input[placeholder*='E-mail']",
+            "input[placeholder*='Email']", "input[type='text']",
+        ],
+        timeout=60000,
+    )
+    campo_senha = _first_visible(
+        page,
+        ["input[name='senha']", "input[name='password']", "input[type='password']", "input[placeholder*='Senha']"],
+        timeout=60000,
+    )
+
+    if not campo_usuario or not campo_senha:
+        _log("[status] Campos de login não encontrados.")
+        return ERRO, None
+
+    campo_usuario.click()
+    campo_usuario.fill("")
+    campo_usuario.type(CRM_USERNAME, delay=100)
+    campo_senha.click()
+    campo_senha.fill("")
+    campo_senha.type(CRM_PASSWORD, delay=100)
+
+    try:
+        page.evaluate(
+            "angular.element(document.querySelector(\"input[ng-model='credentials.username']\")).scope().$apply()"
+        )
+        page.evaluate("angular.element(document.querySelector(\"input[name='senha']\")).scope().$apply()")
+    except Exception:
+        pass
+
+    botao_login = _first_visible(
+        page,
+        ["[ng-click='login(credentials)']", "button[type='submit']", "button:has-text('Entrar')", "button:has-text('Login')"],
+        timeout=15000,
+    )
+    if not botao_login:
+        _log("[status] Botão de login não encontrado.")
+        return ERRO, None
+    botao_login.click()
+    try:
+        page.wait_for_function(
+            "() => window.location.hash && !window.location.hash.includes('authenticate')", timeout=60000,
+        )
+    except Exception:
+        pass
+    time.sleep(2)
+
+    base_url = CRM_URL.rstrip("/")
+    page.goto(f"{base_url}/#/configuracoes/usuarios", wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_load_state("domcontentloaded", timeout=30000)
+    try:
+        page.wait_for_selector("input[ng-model='search.email']", state="visible", timeout=45000)
+    except Exception:
+        time.sleep(4)
+
+    page.fill("input[ng-model='search.email']", email_usuario)
+    page.click("button[ng-click='pesquisar(search)']")
+    time.sleep(3)
+
+    divs = page.locator("div").all()
+    usuario_divs = []
+    for i, div in enumerate(divs):
+        try:
+            text = div.inner_text().lower()
+            if nome_usuario in text or email_usuario.lower() in text:
+                usuario_divs.append((i, div))
+        except Exception:
+            continue
+
+    if not usuario_divs:
+        try:
+            primeira_linha = page.locator("tr.ng-scope, div.usuario-item, div[ng-repeat]").first
+            if primeira_linha.is_visible():
+                usuario_divs.append((0, primeira_linha))
+        except Exception:
+            pass
+
+    if not usuario_divs:
+        return NAO_ENCONTRADO, None
+
+    sucesso = False
+    for _, div in usuario_divs:
+        try:
+            div.click()
+            time.sleep(2)
+
+            menus = page.locator(".angular-bootstrap-contextmenu, .dropdown-menu, ul[role='menu'], .contextmenu").all()
+            menus_visiveis = [m for m in menus if m.is_visible()]
+
+            for menu in menus_visiveis:
+                editar_elementos = menu.locator("a, span, div").all()
+                for elem in editar_elementos:
+                    try:
+                        if elem.is_visible():
+                            text = elem.inner_text().strip()
+                            if text and "editar" in text.lower():
+                                elem.click()
+                                time.sleep(5)
+                                if page.locator("jmj-toggle").count() > 0 or page.locator("strong:has-text('Ativo')").count() > 0:
+                                    sucesso = True
+                                    break
+                    except Exception:
+                        continue
+                if sucesso:
+                    break
+            if sucesso:
+                break
+        except Exception:
+            continue
+
+    if not sucesso:
+        return NAO_ENCONTRADO, None
+
+    try:
+        toggle = page.locator("jmj-toggle button, button[tabindex='-1']").first
+        toggle_class = toggle.get_attribute("class") or ""
+        desligado = "off" in toggle_class.lower() or "inactive" in toggle_class.lower()
+
+        try:
+            login_usuario = page.locator("input#login").input_value()
+        except Exception:
+            login_usuario = email_usuario
+
+        return (INATIVO_STATUS if desligado else ATIVO_STATUS), login_usuario
+    except Exception as e:
+        return ERRO, str(e)
+
+
+def consultar_status_crm(email_usuario):
+    if not CRM_USERNAME or not CRM_PASSWORD:
+        return ERRO, "CRM_USERNAME/CRM_PASSWORD não definidos no .env."
+
+    with sync_playwright() as p:
+        for indice, tentativa in enumerate(TENTATIVAS_EXECUCAO, start=1):
+            browser = None
+            context = None
+            try:
+                browser = p.chromium.launch(**_opcoes_lancamento(**tentativa))
+                context = browser.new_context(ignore_https_errors=True)
+                page = context.new_page()
+
+                status, detalhe = _consultar_fluxo_status(page, email_usuario)
+                if status != ERRO:
+                    return status, detalhe
+
+                print(f"[CRM] [status] Tentativa {indice}: erro funcional.", file=sys.stderr)
+            except Exception as exc:
+                print(f"[CRM] [status] Tentativa {indice} falhou: {exc}", file=sys.stderr)
+            finally:
+                if context:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                time.sleep(1)
+
+        return ERRO, "Todas as tentativas falharam."
+
+
+def executar_crm_automatico(email_usuario, acao='desativar'):
+    acao_normalizada = ACOES_VALIDAS.get((acao or '').lower())
+    if acao_normalizada is None:
         print(f"[CRM] Ação inválida: {acao}", file=sys.stderr)
         return ERRO
 
@@ -327,7 +529,7 @@ def executar_crm_automatico(email_usuario, acao='bloquear'):
                 context = browser.new_context(ignore_https_errors=True)
                 page = context.new_page()
 
-                resultado = _executar_fluxo(page, email_usuario, acao)
+                resultado = _executar_fluxo(page, email_usuario, acao_normalizada)
                 if resultado != ERRO:
                     return resultado
 
@@ -353,13 +555,21 @@ def executar_crm_automatico(email_usuario, acao='bloquear'):
         return ERRO
 
 
+def ativar_usuario_crm(email_usuario):
+    return executar_crm_automatico(email_usuario, acao='ativar')
+
+
+def desativar_usuario_crm(email_usuario):
+    return executar_crm_automatico(email_usuario, acao='desativar')
+
+
 if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_crm.py <email_usuario> [bloquear|desbloquear]")
+        print("USO: python rpa_crm.py <email_usuario> [ativar|desativar]")
         sys.exit(1)
 
-    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'desativar'
     resultado = executar_crm_automatico(email, acao)
     sys.exit(resultado)

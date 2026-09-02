@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block titulo %}Google Workspace{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Google Workspace</h1>
+  <p>Usuários, grupos de email e unidades organizacionais do domínio.</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="abas">
+  <a href="{{ url_for('painel.google_workspace', aba='usuarios') }}" class="aba {{ 'ativa' if aba == 'usuarios' }}">Usuários</a>
+  <a href="{{ url_for('painel.google_workspace', aba='grupos') }}" class="aba {{ 'ativa' if aba == 'grupos' }}">Grupos de email</a>
+  <a href="{{ url_for('painel.google_workspace', aba='unidades') }}" class="aba {{ 'ativa' if aba == 'unidades' }}">Unidades organizacionais</a>
+</div>
+
+<div class="card-panel">
+  {% if aba == 'usuarios' %}
+    <form method="GET" class="toolbar-historico">
+      <input type="hidden" name="aba" value="usuarios">
+      <div class="campo-toolbar campo-busca">
+        <label for="q">Buscar</label>
+        <input type="text" id="q" name="q" value="{{ q }}" placeholder="Nome ou email">
+      </div>
+      <button type="submit" class="btn btn-primario">Buscar</button>
+    </form>
+
+    {% if usuarios %}
+    <div style="overflow-x:auto;">
+      <table class="tabela">
+        <thead>
+          <tr>
+            <th>Nome</th>
+            <th>Email</th>
+            <th>Unidade organizacional</th>
+            <th>Status</th>
+            <th>Último login</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in usuarios %}
+          <tr>
+            <td>{{ u.nome }}{% if u.admin %} <span class="badge badge-parcial">admin</span>{% endif %}</td>
+            <td class="mono">{{ u.email }}</td>
+            <td>{{ u.unidade_organizacional }}</td>
+            <td><span class="badge badge-{{ 'erro' if u.suspenso else 'sucesso' }}">{{ 'Suspenso' if u.suspenso else 'Ativo' }}</span></td>
+            <td class="mono">{{ u.ultimo_login or 'Nunca' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {% if not erro %}<div class="estado-vazio">Nenhum usuário encontrado.</div>{% endif %}
+    {% endif %}
+
+  {% elif aba == 'grupos' %}
+    {% if grupo_selecionado %}
+    <div class="card-panel-header">
+      Membros de {{ grupo_selecionado }}
+      <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">{{ membros_grupo|length }} membro(s)</span>
+      <a href="{{ url_for('painel.google_workspace', aba='grupos') }}" class="btn-limpar-filtros" style="float:right;">Fechar</a>
+    </div>
+    {% if membros_grupo %}
+    <div style="overflow-x:auto; margin-bottom:20px;">
+      <table class="tabela">
+        <thead>
+          <tr><th>Email</th><th>Papel</th><th>Tipo</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for m in membros_grupo %}
+          <tr>
+            <td class="mono">{{ m.email }}</td>
+            <td>{{ m.papel }}</td>
+            <td>{{ m.tipo }}</td>
+            <td>{{ m.status }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="estado-vazio" style="margin-bottom:20px;">Esse grupo não tem membros.</div>
+    {% endif %}
+    {% endif %}
+
+    {% if grupos %}
+    <div style="overflow-x:auto;">
+      <table class="tabela">
+        <thead>
+          <tr>
+            <th>Nome</th>
+            <th>Email</th>
+            <th>Descrição</th>
+            <th>Membros</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in grupos %}
+          <tr>
+            <td>{{ g.nome }}</td>
+            <td class="mono">{{ g.email }}</td>
+            <td>{{ g.descricao or '—' }}</td>
+            <td class="mono">{{ g.quantidade_membros }}</td>
+            <td><a href="{{ url_for('painel.google_workspace', aba='grupos', grupo=g.email) }}" class="btn-limpar-filtros">Ver membros</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {% if not erro %}<div class="estado-vazio">Nenhum grupo encontrado.</div>{% endif %}
+    {% endif %}
+
+  {% elif aba == 'unidades' %}
+    {% if unidades %}
+    <div style="overflow-x:auto;">
+      <table class="tabela">
+        <thead>
+          <tr><th>Caminho</th><th>Nome</th><th>Descrição</th><th>Unidade pai</th></tr>
+        </thead>
+        <tbody>
+          {% for ou in unidades %}
+          <tr>
+            <td class="mono">{{ ou.caminho }}</td>
+            <td>{{ ou.nome }}</td>
+            <td>{{ ou.descricao or '—' }}</td>
+            <td class="mono">{{ ou.caminho_pai or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {% if not erro %}<div class="estado-vazio">Nenhuma unidade organizacional encontrada.</div>{% endif %}
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

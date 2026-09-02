@@ -1,39 +1,14 @@
-"""
-Autenticação de usuários do painel web via Active Directory (LDAP).
-
-Reaproveita a mesma configuração de conexão (AD_URL, AD_USER, AD_PASS, BASE_DN)
-já usada em server.py para consultas administrativas - não é preciso nenhuma
-credencial nova no .env.
-
-Fluxo:
-    1. Usa a conta de serviço (AD_USER/AD_PASS) só para localizar o usuário
-       pelo login (sAMAccountName) e ler o atributo "description".
-    2. Valida a senha informada tentando um bind no AD com o DN do próprio
-       usuário - se o bind falhar, a senha está incorreta.
-    3. Só libera o acesso se o campo "description" do usuário no AD contiver
-       o texto configurado em DESCRICAO_LIBERADA (por padrão, "TI").
-"""
-
 from ldap3 import ALL, Connection, Server
 from ldap3.utils.conv import escape_filter_chars
 
-# Trecho que precisa constar na "descrição" do usuário no AD para liberar o
-# acesso ao painel. Ajuste aqui se no seu AD o time de TI usa outro texto.
 DESCRICAO_LIBERADA = "TI"
 
 
 class ErroAutenticacao(Exception):
-    """Erro de autenticação (usuário/senha inválidos ou sem permissão de acesso)."""
+    pass
 
 
 def autenticar_usuario(login, senha):
-    """
-    Valida login/senha diretamente no Active Directory e confere se o usuário
-    tem permissão para acessar o painel.
-
-    Retorna um dict com os dados do usuário autenticado ou levanta ErroAutenticacao.
-    """
-    # Import tardio evita import circular (server.py importa este módulo indiretamente).
     from server import AD_URL, AD_USER, AD_PASS, BASE_DN
 
     login = (login or "").strip()
@@ -46,7 +21,6 @@ def autenticar_usuario(login, senha):
 
     servidor = Server(AD_URL, get_info=ALL, use_ssl=True)
 
-    # 1) Conta de serviço: só para localizar o usuário e ler a descrição
     conn_servico = Connection(
         servidor, user=AD_USER, password=AD_PASS,
         auto_bind=True, authentication="SIMPLE"
@@ -70,7 +44,6 @@ def autenticar_usuario(login, senha):
     finally:
         conn_servico.unbind()
 
-    # 2) Valida a senha do próprio usuário fazendo o bind com as credenciais informadas
     try:
         conn_usuario = Connection(
             servidor, user=user_dn, password=senha,
@@ -80,7 +53,6 @@ def autenticar_usuario(login, senha):
     except Exception:
         raise ErroAutenticacao("Usuário ou senha inválidos.")
 
-    # 3) Só libera quem tem "TI" na descrição do AD
     if DESCRICAO_LIBERADA.lower() not in descricao.lower():
         raise ErroAutenticacao("Seu usuário não tem permissão para acessar este painel.")
 

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block titulo %}Novo acesso{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Resultado da criação de acesso</h1>
+  <p>{{ nome_completo }} · {{ email }} · usuário: {{ username }}</p>
+</div>
+
+<div class="aviso aviso-erro" style="font-weight:600;">
+  As senhas abaixo só aparecem uma vez nesta tela. Anote e repasse pelo canal seguro de costume antes de sair da página.
+</div>
+
+<div class="cards-row" style="align-items:stretch;">
+  <div class="card">
+    <div class="rotulo" style="margin-bottom:10px;">Active Directory</div>
+    <span class="badge badge-{{ 'sucesso' if resultado_ad.status == 'sucesso' else 'erro' }}">{{ resultado_ad.status }}</span>
+    <p style="margin:10px 0 0; font-size:13px; color:var(--text-secondary);">{{ resultado_ad.mensagem }}</p>
+    {% if resultado_ad.senha %}
+    <div class="detalhe-rotulo" style="margin-top:14px;">Senha temporária (troca obrigatória no 1º login)</div>
+    <div class="mono" style="font-size:15px; font-weight:700; margin-top:4px;">{{ resultado_ad.senha }}</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="rotulo" style="margin-bottom:10px;">Google Workspace</div>
+    <span class="badge badge-{{ 'sucesso' if resultado_google.status == 'sucesso' else 'erro' }}">{{ resultado_google.status }}</span>
+    <p style="margin:10px 0 0; font-size:13px; color:var(--text-secondary);">{{ resultado_google.mensagem }}</p>
+    {% if resultado_google.senha %}
+    <div class="detalhe-rotulo" style="margin-top:14px;">Senha temporária (troca obrigatória no 1º login)</div>
+    <div class="mono" style="font-size:15px; font-weight:700; margin-top:4px;">{{ resultado_google.senha }}</div>
+    {% endif %}
+  </div>
+</div>
+
+<div style="margin-top:20px;">
+  <a href="{{ url_for('painel.colaboradores_novo_acesso') }}" class="btn-limpar-filtros">Criar outro acesso</a>
+  <a href="{{ url_for('painel.colaboradores') }}" class="btn-limpar-filtros">Voltar para Colaboradores</a>
+</div>
+{% endblock %}

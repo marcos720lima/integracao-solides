@@ -16,8 +16,19 @@ TASY_PASSWORD = os.getenv('TASY_PASSWORD')
 
 SUCESSO = 0
 ERRO = 1
-JA_INATIVO = 2
+JA_NO_ESTADO_DESEJADO = 2
 NAO_ENCONTRADO = 3
+
+ACOES_VALIDAS = {
+    "bloquear": "bloquear",
+    "desativar": "bloquear",
+    "inativar": "bloquear",
+    "desbloquear": "desbloquear",
+    "ativar": "desbloquear",
+}
+
+ATIVO_STATUS = "ativo"
+INATIVO_STATUS = "inativo"
 
 
 TENTATIVAS_EXECUCAO = [
@@ -80,10 +91,173 @@ def _salvar_debug(page, prefixo="tasy"):
         pass
 
 
-def executar_tasy_automatico(nome_completo, nome_conta, acao='bloquear'):
-    if acao not in ('bloquear', 'desbloquear'):
+def consultar_status_tasy(nome_completo, nome_conta):
+    if not TASY_USERNAME or not TASY_PASSWORD:
+        return ERRO, "TASY_USERNAME/TASY_PASSWORD nao definidos no .env."
+
+    nome_conta_comparacao = nome_conta.lower().replace('.', ' ')
+
+    with sync_playwright() as p:
+        for indice, tentativa in enumerate(TENTATIVAS_EXECUCAO, start=1):
+            browser = None
+            context = None
+            page = None
+            try:
+                browser = p.chromium.launch(**_opcoes_lancamento(**tentativa))
+                context = browser.new_context(ignore_https_errors=True)
+                page = context.new_page()
+
+                page.goto(f"{TASY_URL}/#/", wait_until="domcontentloaded", timeout=120000)
+                page.wait_for_load_state("domcontentloaded", timeout=60000)
+                time.sleep(2)
+
+                campo_user = _first_visible(page, ["input#loginUsername", "input[name='loginUsername']", "input[type='text']"], timeout=60000)
+                campo_pass = _first_visible(page, ["input#loginPassword", "input[name='loginPassword']", "input[type='password']"], timeout=60000)
+                botao_login = _first_visible(page, ["input.btn-green.w-login-button", "button:has-text('Entrar')", "button[type='submit']"], timeout=60000)
+                if not campo_user or not campo_pass or not botao_login:
+                    return ERRO, "Campos/botao de login nao encontrados."
+
+                campo_user.fill(TASY_USERNAME)
+                time.sleep(0.3)
+                campo_pass.fill(TASY_PASSWORD)
+                time.sleep(0.3)
+                botao_login.click()
+                time.sleep(4)
+
+                try:
+                    page.wait_for_load_state("networkidle", timeout=60000)
+                except Exception:
+                    pass
+                time.sleep(2)
+
+                try:
+                    admin_modulo = page.locator("span.w-feature-app__name:has-text('Administração do Sistema')")
+                    if admin_modulo.count() > 0:
+                        admin_modulo.first.click()
+                    else:
+                        page.click("a:has-text('Administração do Sistema')")
+                except Exception:
+                    page.locator("text=Administração do Sistema").first.click()
+
+                time.sleep(2)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=60000)
+                except Exception:
+                    pass
+                time.sleep(1)
+
+                try:
+                    usuarios_link = page.locator("text=Cadastro de usuários").first
+                    if usuarios_link.is_visible():
+                        usuarios_link.click()
+                    else:
+                        page.locator("span:has-text('Usuários')").first.click()
+                except Exception:
+                    pass
+                time.sleep(2)
+
+                campo_nome = _first_visible(page, ["input[name='NM_PESSOA']", "input[placeholder='Nome']", "input[type='text']"], timeout=60000)
+                if not campo_nome:
+                    return ERRO, "Campo de nome nao encontrado."
+                campo_nome.fill(nome_completo)
+                time.sleep(0.8)
+
+                botao_filtrar = _first_visible(page, ["button:has-text('Filtrar')", "span:has-text('Filtrar')"], timeout=30000)
+                if botao_filtrar:
+                    botao_filtrar.click()
+                time.sleep(2)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception:
+                    pass
+                time.sleep(1)
+
+                if page.locator("text=Esta lista está vazia").count() > 0:
+                    return NAO_ENCONTRADO, None
+
+                linhas = page.locator("div.ui-widget-content.slick-row").all()
+                linha_usuario = None
+                nome_partes = nome_conta_comparacao.split()
+                for linha in linhas:
+                    try:
+                        texto_linha = linha.inner_text().lower()
+                        if all(parte in texto_linha for parte in nome_partes):
+                            linha_usuario = linha
+                            break
+                    except Exception:
+                        continue
+
+                if not linha_usuario:
+                    return NAO_ENCONTRADO, None
+
+                try:
+                    checkbox = linha_usuario.locator("input[type='checkbox'], label.wcheckbox-inputlabel").first
+                    if checkbox.count() > 0:
+                        checkbox.click()
+                    else:
+                        linha_usuario.click()
+                except Exception:
+                    linha_usuario.click()
+                time.sleep(1)
+
+                try:
+                    page.locator("span.handlebar-button-label:has-text('Ver')").first.click()
+                except Exception:
+                    try:
+                        page.locator("button:has-text('Ver')").first.click()
+                    except Exception:
+                        page.locator(".handlebar-button:has-text('Ver'), .ng-scope.handlebar-button:has-text('Ver')").first.click()
+
+                time.sleep(2)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception:
+                    pass
+
+                radio_ativo = page.locator("input[type='radio'][value='A'], label:has-text('Ativo') input[type='radio']").first
+                radio_inativo = page.locator("input[type='radio'][value='I'], label:has-text('Inativo') input[type='radio']").first
+
+                esta_ativo = True
+                try:
+                    if radio_ativo.is_checked():
+                        esta_ativo = True
+                    elif radio_inativo.is_checked():
+                        esta_ativo = False
+                except Exception:
+                    esta_ativo = True
+
+                try:
+                    page.locator("span:has-text('Cancelar'), button:has-text('Cancelar')").first.click()
+                    time.sleep(1)
+                except Exception:
+                    pass
+
+                return (ATIVO_STATUS if esta_ativo else INATIVO_STATUS), nome_conta
+
+            except Exception as exc:
+                print(f"[TASY] [status] Tentativa {indice} falhou: {exc}", file=sys.stderr)
+            finally:
+                time.sleep(1)
+                if context:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+
+        return ERRO, "Todas as tentativas falharam."
+
+
+def executar_tasy_automatico(nome_completo, nome_conta, acao='desativar'):
+    acao_normalizada = ACOES_VALIDAS.get((acao or '').lower())
+    if acao_normalizada is None:
         _log(f"Ação inválida: {acao}")
         return ERRO
+    acao = acao_normalizada
 
     if not TASY_USERNAME or not TASY_PASSWORD:
         _log("TASY_USERNAME/TASY_PASSWORD não definidos no .env.")
@@ -239,16 +413,16 @@ def executar_tasy_automatico(nome_completo, nome_conta, acao='bloquear'):
                         if inativo_selecionado > 0:
                             page.locator("span:has-text('Cancelar'), button:has-text('Cancelar')").first.click()
                             time.sleep(1)
-                            return JA_INATIVO
+                            return JA_NO_ESTADO_DESEJADO
                     except Exception:
-                        return JA_INATIVO
+                        return JA_NO_ESTADO_DESEJADO
                 if acao == 'desbloquear' and esta_ativo:
                     try:
                         page.locator("span:has-text('Cancelar'), button:has-text('Cancelar')").first.click()
                     except Exception:
                         pass
                     time.sleep(1)
-                    return JA_INATIVO
+                    return JA_NO_ESTADO_DESEJADO
 
                 _log("Alterando status e salvando")
                 try:
@@ -304,6 +478,14 @@ def executar_tasy_automatico(nome_completo, nome_conta, acao='bloquear'):
         return ERRO
 
 
+def ativar_usuario_tasy(nome_completo, nome_conta):
+    return executar_tasy_automatico(nome_completo, nome_conta, acao='ativar')
+
+
+def desativar_usuario_tasy(nome_completo, nome_conta):
+    return executar_tasy_automatico(nome_completo, nome_conta, acao='desativar')
+
+
 if __name__ == '__main__':
     acao = 'bloquear'
     if len(sys.argv) >= 4:
@@ -330,8 +512,8 @@ if __name__ == '__main__':
         nome_conta = email.split('@')[0]
         nome_completo = nome_conta.replace('.', ' ').title()
     else:
-        print("USO: python rpa_tasy.py <nome_completo> <nome_conta> [bloquear|desbloquear]")
-        print("  ou: python rpa_tasy.py <email> [bloquear|desbloquear]")
+        print("USO: python rpa_tasy.py <nome_completo> <nome_conta> [ativar|desativar]")
+        print("  ou: python rpa_tasy.py <email> [ativar|desativar]")
         sys.exit(1)
     
     resultado = executar_tasy_automatico(nome_completo, nome_conta, acao)

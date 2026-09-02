@@ -92,11 +92,16 @@ SISTEMAS = {
         'nome': 'Tasy EMR',
         'requer': ['nome', 'email'],
         'script': 'rpa_tasy.py'
+    },
+    'infomed': {
+        'nome': 'Infomed',
+        'requer': ['email'],
+        'script': 'rpa_infomed.py'
     }
 }
 
-def desativar_ad(cpf):
-    """Desativa usuário no Active Directory."""
+def definir_ativo_ad(cpf, ativar):
+    """Ativa ou desativa usuário no Active Directory."""
     try:
         from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
         from ldap3.utils.conv import escape_filter_chars
@@ -128,15 +133,23 @@ def desativar_ad(cpf):
         
         user_dn = str(usuario.entry_dn)
         uac_atual = int(str(usuario.userAccountControl.value))
-        uac_novo = uac_atual | 0x2
+        desativado_atualmente = bool(uac_atual & 0x2)
+
+        if desativado_atualmente == (not ativar):
+            conn.unbind()
+            verbo_estado = 'ativo' if ativar else 'inativo'
+            return {'status': 'ja_inativo', 'msg': f'Usuário {nome} já estava {verbo_estado} no AD'}
+
+        uac_novo = (uac_atual & ~0x2) if ativar else (uac_atual | 0x2)
         modificacao = {'userAccountControl': [(MODIFY_REPLACE, [uac_novo])]}
         
+        verbo = 'ativado' if ativar else 'desativado'
         if conn.modify(user_dn, modificacao):
             conn.unbind()
-            return {'status': 'sucesso', 'msg': f'Usuário {nome} desativado no AD'}
+            return {'status': 'sucesso', 'msg': f'Usuário {nome} {verbo} no AD'}
         else:
             conn.unbind()
-            return {'status': 'erro', 'msg': f'Erro ao desativar: {conn.result}'}
+            return {'status': 'erro', 'msg': f'Erro ao {verbo[:-1]}r: {conn.result}'}
             
     except Exception as e:
         return {'status': 'erro', 'msg': str(e)}
@@ -195,15 +208,15 @@ def executar_rpa(script, args_extra):
     except Exception as e:
         return {'status': 'erro', 'msg': str(e)}
 
-def processar_sistema(sistema_id, cpf=None, email=None, nome=None):
-    """Processa a inativação em um sistema específico."""
+def processar_sistema(sistema_id, cpf=None, email=None, nome=None, acao='desativar'):
+    """Processa a ativação/inativação em um sistema específico."""
     config = SISTEMAS.get(sistema_id)
     if not config:
         return {'status': 'erro', 'msg': f'Sistema {sistema_id} não configurado'}
     
     nome_sistema = config['nome']
     print(f"\n{'─'*50}")
-    print(f"{Cores.NEGRITO}Processando: {nome_sistema}{Cores.RESET}")
+    print(f"{Cores.NEGRITO}Processando: {nome_sistema} ({acao}){Cores.RESET}")
     
     # Verificar parâmetros necessários
     for req in config['requer']:
@@ -218,14 +231,14 @@ def processar_sistema(sistema_id, cpf=None, email=None, nome=None):
             return {'status': 'pulado', 'msg': 'Nome não informado'}
     
     if sistema_id == 'ad':
-        resultado = desativar_ad(cpf)
+        resultado = definir_ativo_ad(cpf, ativar=(acao == 'ativar'))
     elif sistema_id == 'giu':
-        resultado = executar_rpa(config['script'], [cpf])
+        resultado = executar_rpa(config['script'], [cpf, acao])
     elif sistema_id == 'tasy':
         nome_conta = email.split('@')[0] if email else ''
-        resultado = executar_rpa(config['script'], [nome, nome_conta])
+        resultado = executar_rpa(config['script'], [nome, nome_conta, acao])
     else:
-        resultado = executar_rpa(config['script'], [email])
+        resultado = executar_rpa(config['script'], [email, acao])
     
     # Mostrar resultado
     status = resultado['status']
@@ -341,10 +354,12 @@ Exemplos:
     parser.add_argument('--email', help='Email corporativo')
     parser.add_argument('--nome', help='Nome completo (para Tasy)')
     parser.add_argument('--sistemas', nargs='+', 
-                        choices=['ad', 'crm', 'saw', 'giu', 'ged', 'tasy'],
+                        choices=['ad', 'crm', 'saw', 'giu', 'ged', 'tasy', 'infomed'],
                         help='Sistemas específicos para inativar')
     parser.add_argument('--pular-ad', action='store_true', 
                         help='Pular inativação no Active Directory')
+    parser.add_argument('--acao', choices=['ativar', 'desativar'], default='desativar',
+                        help='Ativar ou desativar (padrão: desativar)')
     parser.add_argument('--enviar-email', action='store_true',
                         help='Enviar email de notificação para o TI')
     
@@ -360,7 +375,7 @@ Exemplos:
     if args.sistemas:
         sistemas_processar = args.sistemas
     else:
-        sistemas_processar = ['ad', 'crm', 'saw', 'giu', 'ged', 'tasy']
+        sistemas_processar = ['ad', 'crm', 'saw', 'giu', 'ged', 'tasy', 'infomed']
     
     if args.pular_ad and 'ad' in sistemas_processar:
         sistemas_processar.remove('ad')
@@ -371,6 +386,7 @@ Exemplos:
     print(f"CPF: {args.cpf or 'Não informado'}")
     print(f"Email: {args.email or 'Não informado'}")
     print(f"Nome: {args.nome or 'Não informado'}")
+    print(f"Ação: {args.acao}")
     print(f"Sistemas: {', '.join(sistemas_processar)}")
     
     # Processar cada sistema
@@ -380,7 +396,8 @@ Exemplos:
             sistema,
             cpf=args.cpf,
             email=args.email,
-            nome=args.nome
+            nome=args.nome,
+            acao=args.acao,
         )
     
     # Resumo final

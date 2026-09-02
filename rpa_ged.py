@@ -15,13 +15,137 @@ GED_PASSWORD = os.getenv('GED_PASSWORD')
 
 SUCESSO = 0
 ERRO = 1
-JA_INATIVO = 2
+JA_NO_ESTADO_DESEJADO = 2
 NAO_ENCONTRADO = 3
 
+ACOES_VALIDAS = {
+    "bloquear": "bloquear",
+    "desativar": "bloquear",
+    "inativar": "bloquear",
+    "desbloquear": "desbloquear",
+    "ativar": "desbloquear",
+}
 
-def executar_ged_automatico(email_usuario, acao='bloquear'):
-    if acao not in ('bloquear', 'desbloquear'):
+ATIVO_STATUS = "ativo"
+INATIVO_STATUS = "inativo"
+
+
+def consultar_status_ged(email_usuario):
+    if not GED_CONTA or not GED_USERNAME or not GED_PASSWORD:
+        return ERRO, "GED_CONTA/GED_USERNAME/GED_PASSWORD não definidos no .env."
+
+    nome_busca = email_usuario.split('@')[0].split('.')[0]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            channel="chrome", headless=False,
+            args=["--window-size=600,400", "--window-position=3000,3000"],
+        )
+        page = browser.new_page()
+
+        try:
+            page.goto(GED_URL, timeout=60000)
+            page.wait_for_load_state("domcontentloaded")
+            time.sleep(2)
+
+            page.fill("input[name='conta']", GED_CONTA)
+            time.sleep(0.3)
+            page.fill("input[name='usuario']", GED_USERNAME)
+            time.sleep(0.3)
+            page.fill("input[name='senha']", GED_PASSWORD)
+            time.sleep(0.3)
+            page.click("input.enviar")
+            time.sleep(3)
+
+            page.goto(f"{GED_URL}/idocs_main.php?seta_html=idocs_usuario_cons.php", timeout=30000)
+            page.wait_for_load_state("domcontentloaded")
+            time.sleep(2)
+
+            campo_busca = None
+            seletores_busca = [
+                "input[name='trecho']", "input.post[name='trecho']", "input[class*='post']", "form input[type='text']",
+            ]
+            for seletor in seletores_busca:
+                try:
+                    elemento = page.locator(seletor).first
+                    if elemento.is_visible():
+                        campo_busca = elemento
+                        break
+                except Exception:
+                    continue
+
+            if campo_busca:
+                campo_busca.fill(nome_busca)
+            else:
+                page.locator("input[type='text']").first.fill(nome_busca)
+
+            time.sleep(0.5)
+            page.click("button.btn.btn-success:has-text('Pesquisar')")
+            time.sleep(3)
+
+            linhas = page.locator("table.table-striped.table-bordered.table-hover tbody tr").all()
+            usuario_encontrado = False
+            link_editar = None
+
+            for linha in linhas:
+                try:
+                    texto_linha = linha.inner_text()
+                    if email_usuario.lower() in texto_linha.lower():
+                        link = linha.locator("a[href*='idocs_usuario_manu']").first
+                        if link.count() > 0:
+                            link_editar = link.get_attribute("href")
+                            usuario_encontrado = True
+                            break
+                        else:
+                            img_editar = linha.locator("img[alt='Editar']").first
+                            if img_editar.count() > 0:
+                                img_editar.click()
+                                usuario_encontrado = True
+                                break
+                except Exception:
+                    continue
+
+            if not usuario_encontrado:
+                return NAO_ENCONTRADO, None
+
+            if link_editar:
+                if not link_editar.startswith('http'):
+                    link_editar = f"{GED_URL}/{link_editar}"
+                page.goto(link_editar, timeout=30000)
+                time.sleep(2)
+
+            page.wait_for_load_state("domcontentloaded")
+            time.sleep(2)
+
+            try:
+                try:
+                    login_usuario = page.locator("input[name='cp3']").input_value()
+                except Exception:
+                    login_usuario = email_usuario
+
+                status_element = page.locator("span.genmed:has-text('BLOQUEADO'), span.genmed:has-text('ATIVO')").first
+                if status_element.count() > 0:
+                    status_atual = status_element.inner_text().strip().upper()
+                    if 'BLOQUEADO' in status_atual:
+                        return INATIVO_STATUS, login_usuario
+                    if 'ATIVO' in status_atual:
+                        return ATIVO_STATUS, login_usuario
+                return ERRO, "Elemento de status não encontrado na tela."
+            except Exception as e:
+                return ERRO, str(e)
+
+        except Exception as e:
+            return ERRO, str(e)
+        finally:
+            time.sleep(2)
+            browser.close()
+
+
+def executar_ged_automatico(email_usuario, acao='desativar'):
+    acao_normalizada = ACOES_VALIDAS.get((acao or '').lower())
+    if acao_normalizada is None:
         return ERRO
+    acao = acao_normalizada
 
     nome_busca = email_usuario.split('@')[0].split('.')[0]
     
@@ -123,9 +247,9 @@ def executar_ged_automatico(email_usuario, acao='bloquear'):
             if status_atual:
                 status_upper = status_atual.upper()
                 if acao == 'bloquear' and 'BLOQUEADO' in status_upper:
-                    return JA_INATIVO
+                    return JA_NO_ESTADO_DESEJADO
                 if acao == 'desbloquear' and 'ATIVO' in status_upper:
-                    return JA_INATIVO
+                    return JA_NO_ESTADO_DESEJADO
             
             page.click("button.btn.btn-yellow")
             time.sleep(2)
@@ -146,13 +270,21 @@ def executar_ged_automatico(email_usuario, acao='bloquear'):
             browser.close()
 
 
+def ativar_usuario_ged(email_usuario):
+    return executar_ged_automatico(email_usuario, acao='ativar')
+
+
+def desativar_usuario_ged(email_usuario):
+    return executar_ged_automatico(email_usuario, acao='desativar')
+
+
 if __name__ == '__main__':
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:
-        print("USO: python rpa_ged.py <email_usuario> [bloquear|desbloquear]")
+        print("USO: python rpa_ged.py <email_usuario> [ativar|desativar]")
         sys.exit(1)
 
-    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'bloquear'
+    acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'desativar'
     resultado = executar_ged_automatico(email, acao)
     sys.exit(resultado)
