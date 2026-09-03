@@ -20,6 +20,8 @@ from painel.ad_gestao import (
 from painel.auth_ad import ErroAutenticacao, autenticar_usuario
 from painel.exportacao import gerar_planilha_admissoes, gerar_planilha_desligamentos
 from painel.google_workspace import (
+    adicionar_membro_grupo,
+    criar_grupo,
     criar_usuario_google,
     email_existe_no_google,
     listar_grupos,
@@ -27,6 +29,7 @@ from painel.google_workspace import (
     listar_unidades_organizacionais,
     listar_usuarios,
     obter_status_google,
+    remover_membro_grupo,
 )
 from painel.infomed import InfomedConfigError, buscar_usuarios as infomed_buscar_usuarios
 from painel.infomed import corrigir_preferencias as infomed_corrigir_preferencias
@@ -536,6 +539,66 @@ def tela_google_workspace():
         usuarios=usuarios, grupos=grupos, unidades=unidades,
         grupo_selecionado=grupo_selecionado, membros_grupo=membros_grupo,
     )
+
+
+@painel_bp.route("/api/google-workspace/grupos/criar", methods=["POST"])
+@login_obrigatorio
+def api_google_criar_grupo():
+    email_grupo = (request.form.get("email_grupo") or "").strip().lower()
+    nome = (request.form.get("nome") or "").strip()
+    descricao = (request.form.get("descricao") or "").strip()
+
+    if not email_grupo or not nome:
+        return jsonify({"erro": "Email do grupo e nome são obrigatórios."}), 400
+
+    try:
+        ok, mensagem = criar_grupo(email_grupo, nome, descricao)
+    except GoogleAdminConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao criar o grupo: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, "email_grupo": email_grupo})
+
+
+@painel_bp.route("/api/google-workspace/grupos/<email_grupo>/membros", methods=["POST"])
+@login_obrigatorio
+def api_google_adicionar_membro(email_grupo):
+    email_membro = (request.form.get("email_membro") or "").strip().lower()
+    if not email_membro:
+        return jsonify({"erro": "Informe o email do membro."}), 400
+
+    try:
+        ok, mensagem = adicionar_membro_grupo(email_grupo, email_membro)
+    except GoogleAdminConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao adicionar membro: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, "email_membro": email_membro})
+
+
+@painel_bp.route("/api/google-workspace/grupos/<email_grupo>/membros/remover", methods=["POST"])
+@login_obrigatorio
+def api_google_remover_membro(email_grupo):
+    email_membro = (request.form.get("email_membro") or "").strip().lower()
+    if not email_membro:
+        return jsonify({"erro": "Informe o email do membro."}), 400
+
+    try:
+        ok, mensagem = remover_membro_grupo(email_grupo, email_membro)
+    except GoogleAdminConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao remover membro: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, "email_membro": email_membro})
 
 
 @painel_bp.route("/api/colaboradores/<cpf>/acesso")

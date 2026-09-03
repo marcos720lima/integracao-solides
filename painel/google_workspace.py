@@ -105,6 +105,52 @@ def listar_membros_grupo(email_grupo):
     return membros
 
 
+def criar_grupo(email_grupo, nome, descricao=""):
+    from googleapiclient.errors import HttpError
+
+    service = obter_service_admin()
+    corpo = {"email": email_grupo, "name": nome}
+    if descricao:
+        corpo["description"] = descricao
+
+    try:
+        service.groups().insert(body=corpo).execute()
+        return True, "Grupo criado com sucesso."
+    except HttpError as exc:
+        detalhe = getattr(exc, "reason", None) or str(exc)
+        return False, f"Falha ao criar o grupo: {detalhe}"
+
+
+def adicionar_membro_grupo(email_grupo, email_membro, papel="MEMBER"):
+    from googleapiclient.errors import HttpError
+
+    service = obter_service_admin()
+    try:
+        service.members().insert(
+            groupKey=email_grupo, body={"email": email_membro, "role": papel},
+        ).execute()
+        return True, "Membro adicionado com sucesso."
+    except HttpError as exc:
+        if getattr(exc.resp, "status", None) == 409:
+            return False, "Esse email já é membro do grupo."
+        detalhe = getattr(exc, "reason", None) or str(exc)
+        return False, f"Falha ao adicionar membro: {detalhe}"
+
+
+def remover_membro_grupo(email_grupo, email_membro):
+    from googleapiclient.errors import HttpError
+
+    service = obter_service_admin()
+    try:
+        service.members().delete(groupKey=email_grupo, memberKey=email_membro).execute()
+        return True, "Membro removido com sucesso."
+    except HttpError as exc:
+        if getattr(exc.resp, "status", None) == 404:
+            return False, "Esse email não é membro do grupo."
+        detalhe = getattr(exc, "reason", None) or str(exc)
+        return False, f"Falha ao remover membro: {detalhe}"
+
+
 def listar_unidades_organizacionais():
     service = obter_service_admin()
     resposta = service.orgunits().list(customerId="my_customer", type="all").execute()

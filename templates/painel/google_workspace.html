@@ -64,11 +64,17 @@
       <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">{{ membros_grupo|length }} membro(s)</span>
       <a href="{{ url_for('painel.google_workspace', aba='grupos') }}" class="btn-limpar-filtros" style="float:right;">Fechar</a>
     </div>
+
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      <input type="email" id="input-novo-membro" placeholder="email@empresa.com" style="flex:1; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; font-size:13px; background:var(--card-bg); color:var(--text-primary);">
+      <button type="button" class="btn btn-primario" onclick="adicionarMembroGrupo()">Adicionar membro</button>
+    </div>
+
     {% if membros_grupo %}
     <div style="overflow-x:auto; margin-bottom:20px;">
       <table class="tabela">
         <thead>
-          <tr><th>Email</th><th>Papel</th><th>Tipo</th><th>Status</th></tr>
+          <tr><th>Email</th><th>Papel</th><th>Tipo</th><th>Status</th><th></th></tr>
         </thead>
         <tbody>
           {% for m in membros_grupo %}
@@ -77,6 +83,7 @@
             <td>{{ m.papel }}</td>
             <td>{{ m.tipo }}</td>
             <td>{{ m.status }}</td>
+            <td><button type="button" class="btn-limpar-filtros" onclick="removerMembroGrupo('{{ m.email }}')">Remover</button></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -85,6 +92,29 @@
     {% else %}
     <div class="estado-vazio" style="margin-bottom:20px;">Esse grupo não tem membros.</div>
     {% endif %}
+    {% endif %}
+
+    {% if not grupo_selecionado %}
+    <div style="margin-bottom:16px;">
+      <button type="button" class="btn btn-primario" onclick="alternarFormularioGrupo()">+ Criar grupo</button>
+      <div id="form-criar-grupo" style="display:none; margin-top:12px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-sm);">
+        <div class="form-grid">
+          <div class="campo">
+            <label for="novo-grupo-email">Email do grupo</label>
+            <input type="email" id="novo-grupo-email" placeholder="setor@empresa.com">
+          </div>
+          <div class="campo">
+            <label for="novo-grupo-nome">Nome</label>
+            <input type="text" id="novo-grupo-nome" placeholder="Ex: Setor Financeiro">
+          </div>
+          <div class="campo full">
+            <label for="novo-grupo-descricao">Descrição (opcional)</label>
+            <input type="text" id="novo-grupo-descricao">
+          </div>
+        </div>
+        <button type="button" class="btn btn-primario" onclick="criarGrupoGoogle()" style="margin-top:10px;">Criar</button>
+      </div>
+    </div>
     {% endif %}
 
     {% if grupos %}
@@ -140,4 +170,78 @@
     {% endif %}
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const grupoAtual = {{ grupo_selecionado|tojson }};
+
+  function alternarFormularioGrupo() {
+    const form = document.getElementById('form-criar-grupo');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  }
+
+  async function criarGrupoGoogle() {
+    const emailGrupo = document.getElementById('novo-grupo-email').value.trim();
+    const nome = document.getElementById('novo-grupo-nome').value.trim();
+    const descricao = document.getElementById('novo-grupo-descricao').value.trim();
+
+    if (!emailGrupo || !nome) {
+      mostrarToast('Preencha o email e o nome do grupo.', 'erro');
+      return;
+    }
+
+    try {
+      const resposta = await fetch("{{ url_for('painel.api_google_criar_grupo') }}", {
+        method: 'POST', body: new URLSearchParams({ email_grupo: emailGrupo, nome: nome, descricao: descricao }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        mostrarToast(dados.erro || 'Falha ao criar o grupo.', 'erro');
+        return;
+      }
+      mostrarToast(dados.mensagem, 'sucesso');
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      mostrarToast('Falha ao criar o grupo.', 'erro');
+    }
+  }
+
+  async function adicionarMembroGrupo() {
+    const emailMembro = document.getElementById('input-novo-membro').value.trim();
+    if (!emailMembro) { mostrarToast('Informe o email do membro.', 'erro'); return; }
+
+    try {
+      const resposta = await fetch(`/painel/api/google-workspace/grupos/${encodeURIComponent(grupoAtual)}/membros`, {
+        method: 'POST', body: new URLSearchParams({ email_membro: emailMembro }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        mostrarToast(dados.erro || 'Falha ao adicionar membro.', 'erro');
+        return;
+      }
+      mostrarToast(dados.mensagem, 'sucesso');
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      mostrarToast('Falha ao adicionar membro.', 'erro');
+    }
+  }
+
+  async function removerMembroGrupo(emailMembro) {
+    try {
+      const resposta = await fetch(`/painel/api/google-workspace/grupos/${encodeURIComponent(grupoAtual)}/membros/remover`, {
+        method: 'POST', body: new URLSearchParams({ email_membro: emailMembro }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        mostrarToast(dados.erro || 'Falha ao remover membro.', 'erro');
+        return;
+      }
+      mostrarToast(dados.mensagem, 'sucesso');
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      mostrarToast('Falha ao remover membro.', 'erro');
+    }
+  }
+</script>
 {% endblock %}

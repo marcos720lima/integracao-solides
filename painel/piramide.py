@@ -62,12 +62,15 @@ def buscar_usuarios(termo, limite=50):
         with conexao.cursor() as cursor:
             cursor.execute(
                 f"""
-                SELECT nom_usuario_login, nom_usuario, dsc_email, cod_situacao
-                FROM {schema}.usuario
-                WHERE UPPER(nom_usuario_login) LIKE :termo
-                   OR UPPER(nom_usuario) LIKE :termo
-                   OR UPPER(dsc_email) LIKE :termo
-                ORDER BY nom_usuario
+                SELECT u.nom_usuario_login, u.nom_usuario, u.dsc_email, u.cod_situacao,
+                       u.cod_unid_origem, o.dsc_unid_origem
+                FROM {schema}.usuario u
+                LEFT JOIN {schema}.unidade_origem o
+                       ON o.cod_unid_origem = u.cod_unid_origem
+                WHERE UPPER(u.nom_usuario_login) LIKE :termo
+                   OR UPPER(u.nom_usuario) LIKE :termo
+                   OR UPPER(u.dsc_email) LIKE :termo
+                ORDER BY u.nom_usuario
                 FETCH FIRST :limite ROWS ONLY
                 """,
                 termo=termo_busca, limite=limite,
@@ -80,8 +83,10 @@ def buscar_usuarios(termo, limite=50):
             "nome": nome,
             "email": email,
             "ativo": situacao == "A",
+            "origem_codigo": origem_codigo,
+            "origem": origem_desc,
         }
-        for login, nome, email, situacao in linhas
+        for login, nome, email, situacao, origem_codigo, origem_desc in linhas
     ]
 
 
@@ -92,10 +97,13 @@ def obter_usuario(login):
         with conexao.cursor() as cursor:
             cursor.execute(
                 f"""
-                SELECT nom_usuario_login, nom_usuario, dsc_email, cod_situacao,
-                       cod_login_secundario, ind_usuario_mobile, cod_cargo, dat_ult_alteracao
-                FROM {schema}.usuario
-                WHERE nom_usuario_login = :login
+                SELECT u.nom_usuario_login, u.nom_usuario, u.dsc_email, u.cod_situacao,
+                       u.cod_login_secundario, u.ind_usuario_mobile, u.cod_cargo,
+                       u.dat_ult_alteracao, u.cod_unid_origem, o.dsc_unid_origem
+                FROM {schema}.usuario u
+                LEFT JOIN {schema}.unidade_origem o
+                       ON o.cod_unid_origem = u.cod_unid_origem
+                WHERE u.nom_usuario_login = :login
                 """,
                 login=login,
             )
@@ -104,7 +112,8 @@ def obter_usuario(login):
     if not linha:
         return None
 
-    login, nome, email, situacao, login_secundario, mobile, cargo, ult_alteracao = linha
+    (login, nome, email, situacao, login_secundario, mobile, cargo,
+     ult_alteracao, origem_codigo, origem_desc) = linha
     return {
         "login": login,
         "nome": nome,
@@ -113,6 +122,8 @@ def obter_usuario(login):
         "login_secundario": login_secundario,
         "mobile": mobile == "S",
         "cargo": cargo,
+        "origem_codigo": origem_codigo,
+        "origem": origem_desc,
         "ultima_alteracao": ult_alteracao.strftime("%d/%m/%Y %H:%M") if ult_alteracao else None,
     }
 

@@ -28,6 +28,7 @@
           <th>Login</th>
           <th>Nome</th>
           <th>Email</th>
+          <th>Origem</th>
           <th>Status</th>
           <th></th>
         </tr>
@@ -38,6 +39,7 @@
           <td class="mono">{{ u.login }}</td>
           <td>{{ u.nome }}</td>
           <td>{{ u.email or '—' }}</td>
+          <td>{% if u.origem %}{{ u.origem }} <span class="mono" style="color:var(--text-muted);">({{ u.origem_codigo }})</span>{% elif u.origem_codigo %}{{ u.origem_codigo }}{% else %}—{% endif %}</td>
           <td><span class="badge badge-{{ 'sucesso' if u.ativo else 'erro' }}">{{ 'Ativo' if u.ativo else 'Inativo' }}</span></td>
           <td>
             <button type="button" class="botao-olho" title="Gerenciar" onclick="abrirModalPiramide('{{ u.login }}')">
@@ -86,6 +88,7 @@
       <hr style="border-color:var(--border); margin:18px 0;">
 
       <p style="font-size:13px; color:var(--text-secondary);">Login secundário: <span id="piramide-login-secundario">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Origem: <span id="piramide-origem">—</span></p>
       <p style="font-size:13px; color:var(--text-secondary);">Cargo: <span id="piramide-cargo">—</span></p>
       <p style="font-size:13px; color:var(--text-secondary);">Móvel: <span id="piramide-mobile">—</span></p>
       <p style="font-size:13px; color:var(--text-secondary);">Última alteração: <span id="piramide-ultima-alteracao">—</span></p>
@@ -129,6 +132,8 @@
       document.getElementById('piramide-nome').value = dados.nome || '';
       document.getElementById('piramide-email').value = dados.email || '';
       document.getElementById('piramide-login-secundario').textContent = dados.login_secundario || '—';
+      document.getElementById('piramide-origem').textContent =
+        dados.origem ? `${dados.origem} (${dados.origem_codigo})` : (dados.origem_codigo || '—');
       document.getElementById('piramide-cargo').textContent = dados.cargo || '—';
       document.getElementById('piramide-mobile').textContent = dados.mobile ? 'Sim' : 'Não';
       document.getElementById('piramide-ultima-alteracao').textContent = dados.ultima_alteracao || '—';
