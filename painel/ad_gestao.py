@@ -364,12 +364,33 @@ def ad_buscar_por_sam(sam):
     return resultado
 
 
-def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha):
+def listar_ous_ad():
+    conn, base_dn = _conexao_ad()
+    conn.search(
+        base_dn, "(objectClass=organizationalUnit)",
+        search_scope=SUBTREE, attributes=["ou", "distinguishedName"],
+    )
+
+    unidades = []
+    for entry in conn.entries:
+        dn = str(entry.entry_dn)
+        try:
+            nome = entry.ou.value or dn
+        except Exception:
+            nome = dn
+        unidades.append({"dn": dn, "nome": nome})
+
+    conn.unbind()
+    unidades.sort(key=lambda u: u["dn"])
+    return unidades
+
+
+def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha, ou_destino=None):
     import os
 
-    ou_destino = os.getenv("AD_OU_NOVOS_USUARIOS", "").strip()
+    ou_destino = (ou_destino or "").strip() or os.getenv("AD_OU_NOVOS_USUARIOS", "").strip()
     if not ou_destino:
-        return False, "AD_OU_NOVOS_USUARIOS não configurado no .env.", None
+        return False, "AD_OU_NOVOS_USUARIOS não configurado no .env, e nenhuma OU foi selecionada.", None
 
     conn, base_dn = _conexao_ad()
 

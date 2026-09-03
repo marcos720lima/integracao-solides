@@ -27,6 +27,7 @@ EMPLOYEES_CACHE = {
     "ativos": {"expires_at": 0.0, "itens": []},
     "demitidos": {"expires_at": 0.0, "itens": []},
 }
+VACATION_CACHE = {"expires_at": 0.0, "itens": []}
 
 
 class TangerinoConfigError(Exception):
@@ -175,6 +176,7 @@ def _fetch_single_page(session, url, headers, timeout, params):
 
 def _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, api_page_size=200):
     resultado = []
+    vistos = set()
     page = 0
     total_pages = None
 
@@ -186,7 +188,15 @@ def _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, a
         if total_pages is None:
             total_pages = total_pages_found
 
-        resultado.extend(item for item in items if isinstance(item, dict))
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            chave = item.get("id")
+            if chave is not None:
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+            resultado.append(item)
 
         if total_pages is not None and page >= (total_pages - 1):
             break
@@ -232,6 +242,28 @@ def buscar_todos_employees_brutos(session, headers, timeout, api_page_size=200, 
             vistos.add(id_)
 
     return combinados
+
+
+def contar_colaboradores_por_status():
+    headers = get_headers_from_env()
+    session = build_http_session()
+    timeout = get_timeout()
+
+    ativos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 0)
+    demitidos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 1)
+
+    ids_ativos = {emp.get("id") for emp in ativos if isinstance(emp.get("id"), int)}
+    total_demitidos_sem_duplicar = sum(1 for emp in demitidos if emp.get("id") not in ids_ativos)
+
+    return len(ativos), total_demitidos_sem_duplicar
+
+
+def contar_em_ferias_agora():
+    _, _, total_now = fetch_vacation_rows_page(
+        from_d=None, to_d=None, status_filter=None, only_now=True,
+        ui_page=1, ui_page_size=100000, api_page_size=200,
+    )
+    return total_now
 
 
 def get_workplace_cache_ttl_seconds() -> int:
@@ -299,19 +331,15 @@ def get_job_role_name_map_cached(session, headers, timeout, api_page_size) -> di
     return name_map
 
 
-def fetch_vacation_rows_page(from_d, to_d, status_filter, only_now, ui_page, ui_page_size, api_page_size):
-    headers = get_headers_from_env()
-    session = build_http_session()
-    timeout = get_timeout()
-    agora_ms = int(time.time() * 1000)
+def _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_size=200):
+    now = time.time()
+    if VACATION_CACHE["itens"] and VACATION_CACHE["expires_at"] > now:
+        return VACATION_CACHE["itens"]
 
-    target_start = (ui_page - 1) * ui_page_size
-    target_end_plus_one = target_start + ui_page_size + 1
-
-    matches = []
+    resultado = []
+    vistos = set()
     page = 0
     total_pages = None
-    stopped_early = False
 
     while True:
         items, total_pages_found, _ = _fetch_single_page(
@@ -322,44 +350,70 @@ def fetch_vacation_rows_page(from_d, to_d, status_filter, only_now, ui_page, ui_
             total_pages = total_pages_found
 
         for it in items:
-            st, en = it.get("startDate"), it.get("endDate")
-            if st is None or en is None:
+            if not isinstance(it, dict):
                 continue
-            if status_filter and it.get("status") != status_filter:
+            chave = it.get("id")
+            if chave is None:
+                emp = it.get("employeeDTO") or {}
+                chave = (emp.get("id") or emp.get("email") or emp.get("name"), it.get("startDate"), it.get("endDate"), it.get("status"))
+            if chave in vistos:
                 continue
-            if (from_d or to_d) and not overlaps_interval(st, en, from_d, to_d):
-                continue
+            vistos.add(chave)
+            resultado.append(it)
 
-            in_now = (it.get("status") == "APROVADO") and (st <= agora_ms <= en)
-            if only_now and not in_now:
-                continue
-
-            emp = it.get("employeeDTO") or {}
-            matches.append({
-                "name": emp.get("name", f"ID {emp.get('id', '?')}"),
-                "email": emp.get("email"),
-                "start_str": ms_to_local_str(st),
-                "end_str": ms_to_local_str(en),
-                "status": it.get("status", "-"),
-                "in_now": in_now,
-            })
-
-            if len(matches) >= target_end_plus_one:
-                stopped_early = True
-                break
-
-        if stopped_early:
-            break
         if total_pages is not None and page >= (total_pages - 1):
             break
         if not items:
             break
         page += 1
 
+    VACATION_CACHE["itens"] = resultado
+    VACATION_CACHE["expires_at"] = now + get_employees_cache_ttl_seconds()
+    return resultado
+
+
+def fetch_vacation_rows_page(from_d, to_d, status_filter, only_now, ui_page, ui_page_size, api_page_size):
+    headers = get_headers_from_env()
+    session = build_http_session()
+    timeout = get_timeout()
+    agora_ms = int(time.time() * 1000)
+
+    ajustes = _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_size)
+
+    matches = []
+    total_em_ferias_agora = 0
+
+    for it in ajustes:
+        st, en = it.get("startDate"), it.get("endDate")
+        if st is None or en is None:
+            continue
+
+        in_now = (it.get("status") == "APROVADO") and (st <= agora_ms <= en)
+        if in_now:
+            total_em_ferias_agora += 1
+
+        if status_filter and it.get("status") != status_filter:
+            continue
+        if (from_d or to_d) and not overlaps_interval(st, en, from_d, to_d):
+            continue
+        if only_now and not in_now:
+            continue
+
+        emp = it.get("employeeDTO") or {}
+        matches.append({
+            "name": emp.get("name", f"ID {emp.get('id', '?')}"),
+            "email": emp.get("email"),
+            "start_str": ms_to_local_str(st),
+            "end_str": ms_to_local_str(en),
+            "status": it.get("status", "-"),
+            "in_now": in_now,
+        })
+
+    matches.sort(key=lambda x: x.get("start_str", ""))
+    target_start = (ui_page - 1) * ui_page_size
     page_rows = matches[target_start: target_start + ui_page_size]
-    page_rows.sort(key=lambda x: x.get("start_str", ""))
-    has_next = stopped_early or len(matches) > (target_start + ui_page_size)
-    total_now = sum(1 for row in page_rows if row.get("in_now"))
+    has_next = len(matches) > (target_start + ui_page_size)
+    total_now = total_em_ferias_agora
     return page_rows, has_next, total_now
 
 
@@ -437,6 +491,35 @@ def sort_employee_rows(rows, sort_by: str, sort_dir: str) -> None:
         rows.sort(key=lambda x: (x["job_role_sort"] == "", x["job_role_sort"]), reverse=reverse)
     else:
         rows.sort(key=lambda x: x["name"].lower(), reverse=reverse)
+
+
+def buscar_todos_colaboradores_com_admissao():
+    return fetch_employee_rows_page(
+        employment_status="", q="", show_fired=True,
+        sort_by="name", sort_dir="asc", employee_mode="global",
+        ui_page=1, ui_page_size=100000, api_page_size=200,
+    )[0]
+
+
+def contar_admissoes_por_setor(rows, inicio=None, fim=None, top=10):
+    contagem = {}
+
+    for linha in rows:
+        ts = linha.get("admission_ts")
+        if not ts:
+            continue
+
+        data_iso = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        if inicio and data_iso < inicio:
+            continue
+        if fim and data_iso > fim:
+            continue
+
+        setor = (linha.get("workplaces") or "").split(",")[0].strip() or "Não informado"
+        contagem[setor] = contagem.get(setor, 0) + 1
+
+    ranking = sorted(contagem.items(), key=lambda item: item[1], reverse=True)[:top]
+    return [{"setor": setor, "quantidade": quantidade} for setor, quantidade in ranking]
 
 
 def fetch_employee_rows_page(employment_status, q, show_fired, sort_by, sort_dir, employee_mode, ui_page, ui_page_size, api_page_size):

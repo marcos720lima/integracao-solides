@@ -9,8 +9,23 @@
 
 <div class="cards-row">
   <div class="card card-stat">
-    <div class="rotulo">Total de desligados</div>
-    <div class="valor">{{ total_desligados }}</div>
+    <div class="rotulo">Colaboradores empregados</div>
+    <div class="valor">{{ total_empregados if total_empregados is not none else '—' }}</div>
+  </div>
+
+  <div class="card card-stat">
+    <div class="rotulo">Colaboradores desligados</div>
+    <div class="valor">{{ total_desligados_tangerino if total_desligados_tangerino is not none else '—' }}</div>
+  </div>
+
+  <div class="card card-stat">
+    <div class="rotulo">Desligados desde a integração</div>
+    <div class="valor">{{ total_desligados_integracao }}</div>
+  </div>
+
+  <div class="card card-stat">
+    <div class="rotulo">Colaboradores em férias</div>
+    <div class="valor">{{ total_em_ferias if total_em_ferias is not none else '—' }}</div>
   </div>
 
   <div class="card card-stat">
@@ -51,6 +66,40 @@
   </div>
 
   <div id="grafico-setores" class="grafico-colunas">
+    <div class="estado-vazio">Carregando…</div>
+  </div>
+</div>
+
+<div class="card-panel" style="margin-bottom:20px;">
+  <div class="card-panel-header">
+    Top 10 setores com mais admissões
+    <div class="cabecalho-grafico-direita">
+      <span class="card-grafico-contagem" id="contagem-grafico-admissoes"></span>
+      <a href="#" id="link-exportar-excel-admissoes" class="btn-exportar" download>
+        <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="9.15" y="2.2" width="1.7" height="6.6" rx="0.85" fill="currentColor"/>
+          <path d="M5.6 8.4 10 12.8 14.4 8.4c.5-.5 1.2.2.7.7l-4.5 4.5c-.3.3-.9.3-1.2 0L4.9 9.1c-.5-.5.2-1.2.7-.7Z" fill="currentColor"/>
+          <rect x="2.6" y="14.8" width="14.8" height="2.9" rx="1.45" fill="currentColor" fill-opacity="0.9"/>
+        </svg>
+        Exportar Excel
+      </a>
+    </div>
+  </div>
+
+  <div class="toolbar-historico">
+    <div class="campo-toolbar">
+      <label for="grafico-admissoes-data-inicio">De</label>
+      <input type="date" id="grafico-admissoes-data-inicio">
+    </div>
+    <div class="campo-toolbar">
+      <label for="grafico-admissoes-data-fim">Até</label>
+      <input type="date" id="grafico-admissoes-data-fim">
+    </div>
+    <button type="button" class="btn-limpar-filtros" id="btn-aplicar-grafico-admissoes">Aplicar</button>
+    <button type="button" class="btn-limpar-filtros" id="btn-limpar-grafico-admissoes">Últimos 3 meses</button>
+  </div>
+
+  <div id="grafico-setores-admissoes" class="grafico-colunas">
     <div class="estado-vazio">Carregando…</div>
   </div>
 </div>
@@ -234,6 +283,91 @@
       inputInicio.value = '';
       inputFim.value = '';
       carregarGrafico();
+    });
+  }
+
+  // ---------- Gráfico: top 10 setores com mais admissões (colunas) ----------
+  const graficoAdmissoesEl = document.getElementById('grafico-setores-admissoes');
+  const contagemGraficoAdmissoesEl = document.getElementById('contagem-grafico-admissoes');
+  const inputAdmissoesInicio = document.getElementById('grafico-admissoes-data-inicio');
+  const inputAdmissoesFim = document.getElementById('grafico-admissoes-data-fim');
+  const btnAplicarGraficoAdmissoes = document.getElementById('btn-aplicar-grafico-admissoes');
+  const btnLimparGraficoAdmissoes = document.getElementById('btn-limpar-grafico-admissoes');
+  const linkExportarAdmissoes = document.getElementById('link-exportar-excel-admissoes');
+
+  function periodoPadraoAdmissoes() {
+    const hoje = new Date();
+    const inicio = new Date();
+    inicio.setDate(hoje.getDate() - 90);
+    const paraIso = d => d.toISOString().slice(0, 10);
+    return { inicio: paraIso(inicio), fim: paraIso(hoje) };
+  }
+
+  function atualizarLinkExportarAdmissoes() {
+    if (!linkExportarAdmissoes) return;
+    const parametros = new URLSearchParams();
+    if (inputAdmissoesInicio.value) parametros.set('inicio', inputAdmissoesInicio.value);
+    if (inputAdmissoesFim.value) parametros.set('fim', inputAdmissoesFim.value);
+    linkExportarAdmissoes.href = `{{ url_for('painel.exportar_admissoes_xlsx') }}?${parametros.toString()}`;
+  }
+
+  async function carregarGraficoAdmissoes() {
+    if (!graficoAdmissoesEl) return;
+    graficoAdmissoesEl.innerHTML = '<div class="estado-vazio">Carregando…</div>';
+    atualizarLinkExportarAdmissoes();
+
+    const parametros = new URLSearchParams();
+    if (inputAdmissoesInicio.value) parametros.set('inicio', inputAdmissoesInicio.value);
+    if (inputAdmissoesFim.value) parametros.set('fim', inputAdmissoesFim.value);
+
+    try {
+      const resposta = await fetch(`{{ url_for('painel.api_admissoes_por_setor') }}?${parametros.toString()}`);
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        graficoAdmissoesEl.innerHTML = `<div class="estado-vazio">${dados.erro || 'Falha ao carregar.'}</div>`;
+        return;
+      }
+      renderizarGraficoAdmissoes(dados.setores || []);
+    } catch (e) {
+      graficoAdmissoesEl.innerHTML = '<div class="estado-vazio">Falha ao carregar o gráfico.</div>';
+    }
+  }
+
+  function renderizarGraficoAdmissoes(setores) {
+    if (!setores.length) {
+      graficoAdmissoesEl.innerHTML = '<div class="estado-vazio">Nenhuma admissão no período selecionado.</div>';
+      if (contagemGraficoAdmissoesEl) contagemGraficoAdmissoesEl.textContent = '';
+      return;
+    }
+
+    const maximo = Math.max(...setores.map(s => s.quantidade));
+    graficoAdmissoesEl.innerHTML = setores.map(s => `
+      <div class="coluna-setor">
+        <div class="coluna-setor-valor">${s.quantidade}</div>
+        <div class="coluna-setor-trilho">
+          <div class="coluna-setor-barra" style="height:${Math.max(4, (s.quantidade / maximo * 100)).toFixed(1)}%"></div>
+        </div>
+        <div class="coluna-setor-nome-wrap"><span class="coluna-setor-nome" title="${s.setor}">${s.setor}</span></div>
+      </div>
+    `).join('');
+
+    if (contagemGraficoAdmissoesEl) {
+      const total = setores.reduce((soma, s) => soma + s.quantidade, 0);
+      contagemGraficoAdmissoesEl.textContent = `${total} admissão(ões) no período`;
+    }
+  }
+
+  if (graficoAdmissoesEl) {
+    const padrao = periodoPadraoAdmissoes();
+    inputAdmissoesInicio.value = padrao.inicio;
+    inputAdmissoesFim.value = padrao.fim;
+    carregarGraficoAdmissoes();
+    btnAplicarGraficoAdmissoes.addEventListener('click', carregarGraficoAdmissoes);
+    btnLimparGraficoAdmissoes.addEventListener('click', () => {
+      const padrao2 = periodoPadraoAdmissoes();
+      inputAdmissoesInicio.value = padrao2.inicio;
+      inputAdmissoesFim.value = padrao2.fim;
+      carregarGraficoAdmissoes();
     });
   }
 

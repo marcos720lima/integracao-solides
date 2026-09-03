@@ -146,7 +146,7 @@ def obter_status_google(email):
         raise
 
 
-def criar_usuario_google(nome, sobrenome, email, senha, cargo=None, departamento=None):
+def criar_usuario_google(nome, sobrenome, email, senha, cargo=None, departamento=None, unidade_organizacional=None):
     service = obter_service_admin()
 
     corpo = {
@@ -155,6 +155,9 @@ def criar_usuario_google(nome, sobrenome, email, senha, cargo=None, departamento
         "password": senha,
         "changePasswordAtNextLogin": True,
     }
+
+    if unidade_organizacional:
+        corpo["orgUnitPath"] = unidade_organizacional
 
     organizacao = {}
     if cargo:

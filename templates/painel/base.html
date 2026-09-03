@@ -103,6 +103,15 @@
           </span>
           Infomed
         </a>
+        <a href="{{ url_for('painel.piramide') }}" class="{{ 'ativo' if request.endpoint == 'painel.piramide' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 2.5 17.5 16h-15L10 2.5Z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/>
+              <path d="M10 8.5 14 16h-8L10 8.5Z" fill="currentColor" fill-opacity="0.25"/>
+            </svg>
+          </span>
+          Pirâmide
+        </a>
         <a href="{{ url_for('painel.logs') }}" class="{{ 'ativo' if request.endpoint == 'painel.logs' else '' }}">
           <span class="icon">
             <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -184,6 +193,20 @@
       {% block conteudo %}{% endblock %}
     </main>
   </div>
+
+  <div id="toast-container" style="position:fixed; top:20px; right:20px; z-index:1000; display:flex; flex-direction:column; gap:10px; max-width:380px;"></div>
+  <script>
+    function mostrarToast(mensagem, tipo) {
+      tipo = tipo || 'info';
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast-flutuante toast-${tipo}`;
+      toast.innerHTML = `<span class="toast-texto">${mensagem}</span><button type="button" class="toast-fechar" aria-label="Fechar">&times;</button>`;
+      toast.querySelector('.toast-fechar').addEventListener('click', () => toast.remove());
+      container.appendChild(toast);
+      return toast;
+    }
+  </script>
 
   {% block scripts %}{% endblock %}
 

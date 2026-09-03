@@ -1,6 +1,6 @@
 import functools
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
 
@@ -15,9 +15,10 @@ from painel.ad_gestao import (
     ad_update_logon_hours_by_sam,
     build_logon_hours_bytes,
     criar_usuario_ad,
+    listar_ous_ad,
 )
 from painel.auth_ad import ErroAutenticacao, autenticar_usuario
-from painel.exportacao import gerar_planilha_desligamentos
+from painel.exportacao import gerar_planilha_admissoes, gerar_planilha_desligamentos
 from painel.google_workspace import (
     criar_usuario_google,
     email_existe_no_google,
@@ -34,12 +35,20 @@ from painel.infomed import obter_usuario as infomed_obter_usuario
 from painel.infomed import editar_dados as infomed_editar_dados
 from painel.infomed import alterar_perfil as infomed_alterar_perfil
 from painel.infomed import PERFIS_CONHECIDOS as INFOMED_PERFIS_CONHECIDOS
+from painel.piramide import PiramideConfigError, buscar_usuarios as piramide_buscar_usuarios
+from painel.piramide import definir_ativo as piramide_definir_ativo
+from painel.piramide import obter_usuario as piramide_obter_usuario
+from painel.piramide import editar_dados as piramide_editar_dados
 from google_admin import GoogleAdminConfigError
 from painel.jobs import iniciar_job_inativacao, obter_status_job
 from painel.rpa_status_jobs import NOMES_SISTEMAS, iniciar_job_status_sistemas, obter_status_job_sistemas
 from painel.tangerino import (
     TangerinoConfigError,
     buscar_colaborador_por_cpf,
+    buscar_todos_colaboradores_com_admissao,
+    contar_admissoes_por_setor,
+    contar_colaboradores_por_status,
+    contar_em_ferias_agora,
     fetch_employee_rows_page,
     fetch_vacation_rows_page,
     normalizar_cpf,
@@ -74,11 +83,12 @@ SISTEMAS_DISPONIVEIS = [
     ("ged", "GED Bye Bye Paper"),
     ("tasy", "Tasy EMR"),
     ("infomed", "Infomed"),
+    ("piramide", "Pirâmide"),
 ]
 
 # todos os sistemas acima já suportam ativar E desativar - mantido como um set
 # separado pra facilitar esmaecer na tela algum sistema que no futuro só suporte uma direção
-SISTEMAS_SUPORTAM_ATIVAR = {"ad", "crm", "saw", "giu", "ged", "tasy", "infomed"}
+SISTEMAS_SUPORTAM_ATIVAR = {"ad", "crm", "saw", "giu", "ged", "tasy", "infomed", "piramide"}
 
 
 def login_obrigatorio(view):
@@ -132,9 +142,22 @@ def dashboard():
     for linha in historico:
         linha["cpf_mascarado"] = mascarar_cpf(linha.get("cpf", ""))
 
+    try:
+        total_empregados, total_desligados_tangerino = contar_colaboradores_por_status()
+    except Exception:
+        total_empregados, total_desligados_tangerino = None, None
+
+    try:
+        total_em_ferias = contar_em_ferias_agora()
+    except Exception:
+        total_em_ferias = None
+
     return render_template(
         "dashboard.html",
-        total_desligados=len(historico),
+        total_desligados_integracao=len(historico),
+        total_empregados=total_empregados,
+        total_desligados_tangerino=total_desligados_tangerino,
+        total_em_ferias=total_em_ferias,
         em_execucao=obter_demissoes_em_execucao(),
         historico=historico[:LIMITE_MAXIMO_HISTORICO],
         limite_maximo=LIMITE_MAXIMO_HISTORICO,
@@ -155,6 +178,48 @@ def api_desligamentos_por_setor():
     historico = ler_historico_desligamentos()
     ranking = contar_desligamentos_por_setor(historico, inicio=inicio, fim=fim, top=10)
     return jsonify({"setores": ranking})
+
+
+def _periodo_padrao_admissoes():
+    hoje = date.today()
+    inicio_padrao = hoje - timedelta(days=90)
+    return inicio_padrao.isoformat(), hoje.isoformat()
+
+
+@painel_bp.route("/api/admissoes-por-setor")
+@login_obrigatorio
+def api_admissoes_por_setor():
+    inicio_padrao, fim_padrao = _periodo_padrao_admissoes()
+    inicio = request.args.get("inicio") or inicio_padrao
+    fim = request.args.get("fim") or fim_padrao
+
+    try:
+        rows = buscar_todos_colaboradores_com_admissao()
+    except TangerinoConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o Tangerino: {e}"}), 502
+
+    ranking = contar_admissoes_por_setor(rows, inicio=inicio, fim=fim, top=10)
+    return jsonify({"setores": ranking, "inicio": inicio, "fim": fim})
+
+
+@painel_bp.route("/exportar/admissoes.xlsx")
+@login_obrigatorio
+def exportar_admissoes_xlsx():
+    inicio_padrao, fim_padrao = _periodo_padrao_admissoes()
+    inicio = request.args.get("inicio") or inicio_padrao
+    fim = request.args.get("fim") or fim_padrao
+
+    rows = buscar_todos_colaboradores_com_admissao()
+    planilha = gerar_planilha_admissoes(rows, inicio=inicio, fim=fim)
+    nome_arquivo = f"admissoes_{inicio}_a_{fim}.xlsx"
+
+    return Response(
+        planilha.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )
 
 
 @painel_bp.route("/exportar/desligamentos.xlsx")
@@ -745,8 +810,23 @@ def api_verificar_email_google():
 @painel_bp.route("/colaboradores/novo-acesso", methods=["GET", "POST"])
 @login_obrigatorio
 def colaboradores_novo_acesso():
+    ous_google = []
+    try:
+        ous_google = listar_unidades_organizacionais()
+    except Exception as e:
+        flash(f"Não foi possível carregar as unidades organizacionais do Google: {e}", "erro")
+
+    ous_ad = []
+    try:
+        ous_ad = listar_ous_ad()
+    except Exception as e:
+        flash(f"Não foi possível carregar as OUs do Active Directory: {e}", "erro")
+
     if request.method == "GET":
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""))
+        return render_template(
+            "novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""),
+            ous_google=ous_google, ous_ad=ous_ad,
+        )
 
     cpf = normalizar_cpf(request.form.get("cpf"))
     nome_completo = (request.form.get("nome_completo") or "").strip()
@@ -754,6 +834,8 @@ def colaboradores_novo_acesso():
     cargo = (request.form.get("cargo") or "").strip()
     username = (request.form.get("username") or "").strip()
     email = (request.form.get("email") or "").strip().lower()
+    ou_google = (request.form.get("ou_google") or "").strip()
+    ou_ad = (request.form.get("ou_ad") or "").strip()
 
     erros = []
     if not cpf:
@@ -768,28 +850,28 @@ def colaboradores_novo_acesso():
     if erros:
         for erro in erros:
             flash(erro, "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form)
+        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
 
     try:
         usuario_existente = ad_buscar_por_employee_id(cpf, UTC_OFFSET_HOURS)
     except Exception as e:
         flash(f"Não foi possível validar o CPF no Active Directory: {e}", "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form)
+        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
 
     if usuario_existente:
         flash(f"Esse CPF já está cadastrado no AD (usuário: {usuario_existente['sam']}).", "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form)
+        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
 
     try:
         if email_existe_no_google(email):
             flash(f"Já existe uma conta no Google Workspace com o email {email}.", "erro")
-            return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form)
+            return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
     except GoogleAdminConfigError as e:
         flash(str(e), "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form)
+        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
     except Exception as e:
         flash(f"Não foi possível validar o email no Google Workspace: {e}", "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form)
+        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
 
     partes_nome = nome_completo.split(" ", 1)
     primeiro_nome = partes_nome[0]
@@ -799,13 +881,13 @@ def colaboradores_novo_acesso():
     senha_google = gerar_senha_temporaria()
 
     try:
-        ok, mensagem, _dn = criar_usuario_ad(nome_completo, setor, username, email, cpf, senha_ad)
+        ok, mensagem, _dn = criar_usuario_ad(nome_completo, setor, username, email, cpf, senha_ad, ou_destino=ou_ad or None)
         resultado_ad = {"status": "sucesso" if ok else "erro", "mensagem": mensagem, "senha": senha_ad if ok else None}
     except Exception as e:
         resultado_ad = {"status": "erro", "mensagem": str(e), "senha": None}
 
     try:
-        criar_usuario_google(primeiro_nome, sobrenome, email, senha_google, cargo=cargo or None, departamento=setor or None)
+        criar_usuario_google(primeiro_nome, sobrenome, email, senha_google, cargo=cargo or None, departamento=setor or None, unidade_organizacional=ou_google or None)
         resultado_google = {"status": "sucesso", "mensagem": "Usuário criado com sucesso no Google Workspace.", "senha": senha_google}
     except Exception as e:
         resultado_google = {"status": "erro", "mensagem": str(e), "senha": None}
@@ -931,3 +1013,73 @@ def api_infomed_corrigir_preferencias(codigo):
     if not ok:
         return jsonify({"erro": mensagem}), 400
     return jsonify({"mensagem": mensagem})
+
+
+@painel_bp.route("/piramide", endpoint="piramide")
+@login_obrigatorio
+def tela_piramide():
+    q = request.args.get("q", "").strip()
+    erro = None
+    usuarios = []
+
+    if q:
+        try:
+            usuarios = piramide_buscar_usuarios(q)
+        except PiramideConfigError as e:
+            erro = str(e)
+        except Exception as e:
+            erro = f"Falha ao consultar o Pirâmide: {e}"
+
+    return render_template("piramide.html", q=q, usuarios=usuarios, erro=erro)
+
+
+@painel_bp.route("/api/piramide/usuario/<login>")
+@login_obrigatorio
+def api_piramide_usuario(login):
+    try:
+        usuario = piramide_obter_usuario(login)
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o Pirâmide: {e}"}), 502
+
+    if not usuario:
+        return jsonify({"erro": "Usuário não encontrado."}), 404
+    return jsonify(usuario)
+
+
+@painel_bp.route("/api/piramide/usuario/<login>/dados", methods=["POST"])
+@login_obrigatorio
+def api_piramide_editar_dados(login):
+    nome = (request.form.get("nome") or "").strip()
+    email = (request.form.get("email") or "").strip()
+
+    if not nome:
+        return jsonify({"erro": "Nome é obrigatório."}), 400
+
+    try:
+        ok, mensagem = piramide_editar_dados(login, nome, email)
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao atualizar o Pirâmide: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, "nome": nome, "email": email})
+
+
+@painel_bp.route("/api/piramide/usuario/<login>/ativo", methods=["POST"])
+@login_obrigatorio
+def api_piramide_definir_ativo(login):
+    ativo = request.form.get("ativo") == "1"
+    try:
+        ok, mensagem = piramide_definir_ativo(login, ativo)
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao atualizar o Pirâmide: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, "ativo": ativo})

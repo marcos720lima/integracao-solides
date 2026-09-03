@@ -788,6 +788,42 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
 .aviso-erro { background: var(--danger-soft); color: var(--danger); }
 .aviso-sucesso { background: var(--success-soft); color: var(--success); }
 
+@keyframes toast-entrada {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.toast-flutuante {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  animation: toast-entrada 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.toast-flutuante .toast-texto { flex: 1; }
+
+.toast-flutuante .toast-fechar {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0;
+}
+.toast-flutuante .toast-fechar:hover { opacity: 1; }
+
+.toast-erro { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+.toast-sucesso { background: var(--success-soft); color: var(--success); border-color: var(--success); }
+.toast-info { background: var(--card-bg); color: var(--text-primary); border-color: var(--border); }
+
 /* ---------- pipeline ---------- */
 
 .pipeline {

@@ -18,8 +18,6 @@
         <button type="button" class="btn btn-primario" id="btn-buscar-cpf" style="width:fit-content;">Buscar no Tangerino</button>
       </div>
 
-      <div class="campo full" id="status-busca-cpf"></div>
-
       <div class="campo">
         <label for="matricula">Matrícula</label>
         <input type="text" id="matricula" readonly style="background:var(--surface-subtle);">
@@ -46,10 +44,12 @@
       <div class="campo">
         <label for="setor">Setor <span style="font-weight:400; color:var(--text-muted);">(descrição no AD / departamento no Google)</span></label>
         <input type="text" id="setor" name="setor" value="{{ form.setor if form else '' }}" required>
+        <div id="setor-original" style="font-size:11.5px; color:var(--text-muted); margin-top:4px; display:none;"></div>
       </div>
       <div class="campo">
         <label for="cargo">Cargo <span style="font-weight:400; color:var(--text-muted);">(cargo no Google)</span></label>
         <input type="text" id="cargo" name="cargo" value="{{ form.cargo if form else '' }}">
+        <div id="cargo-original" style="font-size:11.5px; color:var(--text-muted); margin-top:4px; display:none;"></div>
       </div>
 
       <div class="campo">
@@ -61,7 +61,24 @@
         <input type="text" id="email" name="email" value="{{ form.email if form else '' }}" required>
       </div>
 
-      <div class="campo full" id="status-email"></div>
+      <div class="campo">
+        <label for="ou_ad">OU do AD</label>
+        <select id="ou_ad" name="ou_ad">
+          <option value="">Usar padrão (AD_OU_NOVOS_USUARIOS)</option>
+          {% for ou in ous_ad %}
+          <option value="{{ ou.dn }}" {{ 'selected' if form and form.ou_ad == ou.dn }}>{{ ou.nome }} — {{ ou.dn }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="campo">
+        <label for="ou_google">OU do Google</label>
+        <select id="ou_google" name="ou_google">
+          <option value="">Usar padrão (raiz)</option>
+          {% for ou in ous_google %}
+          <option value="{{ ou.caminho }}" {{ 'selected' if form and form.ou_google == ou.caminho }}>{{ ou.caminho }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
 
     <div class="form-footer">
@@ -74,24 +91,25 @@
 {% block scripts %}
 <script>
   const dominioGoogle = "{{ dominio_google }}";
+  let toastBuscaCpf = null;
+  let toastEmail = null;
 
   document.getElementById('btn-buscar-cpf').addEventListener('click', buscarCpf);
 
   async function buscarCpf() {
     const cpf = document.getElementById('cpf').value.trim();
-    const status = document.getElementById('status-busca-cpf');
     if (!cpf) { return; }
 
-    status.className = 'estado-vazio';
-    status.textContent = 'Buscando no Tangerino…';
+    if (toastBuscaCpf) toastBuscaCpf.remove();
+    toastBuscaCpf = mostrarToast('Buscando no Tangerino…', 'info');
 
     try {
       const resposta = await fetch(`{{ url_for('painel.api_buscar_colaborador_cpf') }}?cpf=${encodeURIComponent(cpf)}`);
       const dados = await resposta.json();
+      toastBuscaCpf.remove();
 
       if (!resposta.ok) {
-        status.className = 'aviso aviso-erro';
-        status.textContent = dados.erro || 'Falha ao buscar no Tangerino.';
+        toastBuscaCpf = mostrarToast(dados.erro || 'Falha ao buscar no Tangerino.', 'erro');
         return;
       }
 
@@ -103,27 +121,37 @@
       document.getElementById('cargo').value = dados.cargo || '';
       document.getElementById('email_pessoal').value = dados.email_pessoal || '';
 
+      const setorOriginal = document.getElementById('setor-original');
+      setorOriginal.textContent = `Original do Tangerino: ${dados.setor || '—'}`;
+      setorOriginal.style.display = 'block';
+
+      const cargoOriginal = document.getElementById('cargo-original');
+      cargoOriginal.textContent = `Original do Tangerino: ${dados.cargo || '—'}`;
+      cargoOriginal.style.display = 'block';
+
       const login = dados.login_sugerido || '';
       document.getElementById('username').value = login;
       document.getElementById('email').value = login && dominioGoogle ? `${login}@${dominioGoogle}` : '';
 
       const botaoCriar = document.getElementById('btn-criar-acesso');
       if (dados.ad_existente) {
-        status.className = 'aviso aviso-erro';
-        status.textContent = `Esse colaborador já tem usuário no AD: ${dados.ad_existente.sam}` +
-          (dados.ad_existente.mail ? ` (${dados.ad_existente.mail})` : '') + '. Criação bloqueada.';
+        toastBuscaCpf = mostrarToast(
+          `Esse colaborador já tem usuário no AD: ${dados.ad_existente.sam}` +
+          (dados.ad_existente.mail ? ` (${dados.ad_existente.mail})` : '') + '. Criação bloqueada.',
+          'erro'
+        );
         botaoCriar.disabled = true;
         return;
       }
 
-      status.className = 'aviso aviso-sucesso';
-      status.textContent = 'Dados encontrados no Tangerino. Nenhum usuário existente no AD para esse CPF/login.';
+      toastBuscaCpf = mostrarToast('Dados encontrados no Tangerino. Nenhum usuário existente no AD para esse CPF/login.', 'sucesso');
+      setTimeout(() => { if (toastBuscaCpf) { toastBuscaCpf.remove(); toastBuscaCpf = null; } }, 4000);
       botaoCriar.disabled = false;
 
       if (document.getElementById('email').value) verificarEmail();
     } catch (e) {
-      status.className = 'aviso aviso-erro';
-      status.textContent = 'Falha ao buscar no Tangerino.';
+      if (toastBuscaCpf) toastBuscaCpf.remove();
+      toastBuscaCpf = mostrarToast('Falha ao buscar no Tangerino.', 'erro');
     }
   }
 
@@ -131,34 +159,33 @@
 
   async function verificarEmail() {
     const email = document.getElementById('email').value.trim();
-    const status = document.getElementById('status-email');
     const botaoCriar = document.getElementById('btn-criar-acesso');
-    if (!email) { status.textContent = ''; return; }
+    if (!email) { return; }
 
-    status.className = 'estado-vazio';
-    status.textContent = 'Verificando disponibilidade no Google Workspace…';
+    if (toastEmail) toastEmail.remove();
+    toastEmail = mostrarToast('Verificando disponibilidade no Google Workspace…', 'info');
 
     try {
       const resposta = await fetch(`{{ url_for('painel.api_verificar_email_google') }}?email=${encodeURIComponent(email)}`);
       const dados = await resposta.json();
+      toastEmail.remove();
 
       if (!resposta.ok) {
-        status.className = 'aviso aviso-erro';
-        status.textContent = dados.erro || 'Falha ao verificar o email.';
+        toastEmail = mostrarToast(dados.erro || 'Falha ao verificar o email.', 'erro');
         return;
       }
 
       if (dados.existe) {
-        status.className = 'aviso aviso-erro';
-        status.textContent = 'Já existe uma conta com esse email no Google Workspace.';
+        toastEmail = mostrarToast('Já existe uma conta com esse email no Google Workspace.', 'erro');
         botaoCriar.disabled = true;
       } else {
-        status.className = 'aviso aviso-sucesso';
-        status.textContent = 'Email disponível.';
+        toastEmail = mostrarToast('Email disponível.', 'sucesso');
+        setTimeout(() => { if (toastEmail) { toastEmail.remove(); toastEmail = null; } }, 3000);
         botaoCriar.disabled = false;
       }
     } catch (e) {
-      status.textContent = '';
+      if (toastEmail) toastEmail.remove();
+      toastEmail = null;
     }
   }
 </script>

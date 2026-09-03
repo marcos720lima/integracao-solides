@@ -18,6 +18,7 @@ import sys
 import threading
 import csv
 from datetime import datetime
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
@@ -109,6 +110,8 @@ AD_USER = os.getenv('AD_USER')
 AD_PASS = os.getenv('AD_PASS')
 BASE_DN = os.getenv('BASE_DN')
 
+LOGO_UNIMED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'painel', 'img', 'logo_unimed.png')
+
 EMAIL_CONFIG = {
     'smtp_server': os.getenv('EMAIL_SMTP_SERVER', 'smtp.gmail.com'),
     'smtp_port': int(os.getenv('EMAIL_SMTP_PORT', 587)),
@@ -186,6 +189,13 @@ SISTEMAS_CONFIG = {
         'script': 'rpa_infomed.py',
         'timeout': 60,
         'nome': 'Infomed',
+        'requer_ad': True  # Identifica pelo email corporativo (do AD)
+    },
+    'piramide': {
+        'ativo': False,  # fora do fluxo automático: inativar pode bloquear processos abertos que precisam do usuário ativo até finalizar. Usar só via ativação/inativação manual.
+        'script': 'rpa_piramide.py',
+        'timeout': 60,
+        'nome': 'Pirâmide',
         'requer_ad': True  # Identifica pelo email corporativo (do AD)
     }
 }
@@ -499,12 +509,22 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
             setor, cargo, status_sistemas, resultado_ad
         )
         
-        msg = MIMEMultipart('alternative')
+        msg = MIMEMultipart('related')
         msg['Subject'] = f"NOTIFICAÇÃO: Colaborador Demitido - {nome_colaborador}"
         msg['From'] = EMAIL_CONFIG['username']
         msg['To'] = ', '.join(TI_EMAILS)
-        
+
         msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+
+        try:
+            with open(LOGO_UNIMED_PATH, 'rb') as arquivo_logo:
+                imagem_logo = MIMEImage(arquivo_logo.read())
+                imagem_logo.add_header('Content-ID', '<logo_unimed>')
+                imagem_logo.add_header('Content-Disposition', 'inline', filename='logo_unimed.png')
+                msg.attach(imagem_logo)
+        except FileNotFoundError:
+            logger.warning("[EMAIL] Logo da Unimed não encontrada, enviando sem imagem.")
+
         smtp.send_message(msg)
         
         logger.info("[OK] [EMAIL] Email enviado com sucesso!")
@@ -537,7 +557,8 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
         'giu': STATUS_NAO_EXECUTADO,
         'ged': STATUS_NAO_EXECUTADO,
         'nextqs': STATUS_NAO_EXECUTADO,
-        'tasy': STATUS_NAO_EXECUTADO
+        'tasy': STATUS_NAO_EXECUTADO,
+        'infomed': STATUS_NAO_EXECUTADO
     }
     
     if not resultado_sistemas:
@@ -561,6 +582,8 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['nextqs'] = obter_status_formatado(sistema)
         elif 'TASY' in nome:
             status['tasy'] = obter_status_formatado(sistema)
+        elif 'INFOMED' in nome:
+            status['infomed'] = obter_status_formatado(sistema)
     
     # Processar sistemas pulados (quando usuário não encontrado no AD)
     for sistema in resultado_sistemas.get('sistemas_pulados', []):
@@ -574,30 +597,40 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['ged'] = STATUS_NAO_EXECUTADO
         elif 'TASY' in nome:
             status['tasy'] = STATUS_NAO_EXECUTADO
+        elif 'INFOMED' in nome:
+            status['infomed'] = STATUS_NAO_EXECUTADO
     
     return status
 
 
 def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
-    """Gera o HTML do email de notificação."""
+    """Gera o HTML do email de notificação, com a identidade visual da Unimed."""
     return f"""
     <html>
     <head>
         <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            h2 {{ color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px; }}
-            h3 {{ color: #2c3e50; margin-top: 25px; }}
-            .info-box {{ background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; }}
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f2f4f3; }}
+            .container {{ max-width: 600px; margin: 0 auto; }}
+            .cabecalho {{ background-color: #004e4c; padding: 24px 20px; text-align: center; }}
+            .cabecalho img {{ max-width: 220px; height: auto; }}
+            .corpo {{ background-color: #ffffff; padding: 20px 24px 8px; }}
+            h2 {{ color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px; margin-top: 0; }}
+            h3 {{ color: #00995d; margin-top: 25px; }}
+            .info-box {{ background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #00995d; }}
             .status-box {{ background-color: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #ffc107; }}
             table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
             td {{ padding: 8px 12px; border-bottom: 1px solid #ddd; }}
             td:first-child {{ font-weight: bold; width: 40%; background-color: #f8f9fa; }}
-            .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }}
+            .footer {{ padding: 16px 24px 24px; font-size: 12px; color: #666; border-top: 1px solid #e0e7e4; }}
+            .footer-marca {{ color: #00995d; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="container">
+            <div class="cabecalho">
+                <img src="cid:logo_unimed" alt="Unimed Oeste do Pará">
+            </div>
+            <div class="corpo">
             <h2>NOTIFICAÇÃO: Colaborador Demitido - {nome}</h2>
             
             <h3>Informações do Colaborador</h3>
@@ -623,6 +656,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
                     <tr><td>GIU Unimed:</td><td>{status['giu']}</td></tr>
                     <tr><td>GED (Bye Bye Paper):</td><td>{status['ged']}</td></tr>
                     <tr><td>Tasy EMR:</td><td>{status['tasy']}</td></tr>
+                    <tr><td>Infomed:</td><td>{status['infomed']}</td></tr>
                 </table>
             </div>
             
@@ -641,10 +675,11 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
                 <li>Verificar acesso a demais sistemas não inseridos no fluxo</li>
                 <li>Confirmar desativação do email corporativo</li>
             </ul>
+            </div>
             
             <div class="footer">
-                <p><em>Esta é uma notificação automática do sistema de integração Solides + Active Directory.</em></p>
-                <p><em>Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M:%S')}</em></p>
+                <p><span class="footer-marca">Unimed Oeste do Pará</span> — Sistema de Gestão de Identidade e Acesso</p>
+                <p><em>Esta é uma notificação automática. Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M:%S')}</em></p>
             </div>
         </div>
     </body>

@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block titulo %}Pirâmide{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>Pirâmide</h1>
+  <p>Busca direta no banco do Pirâmide — ativar, inativar e editar dados de usuário.</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <div class="campo-toolbar campo-busca">
+      <label for="q">Buscar por login, nome ou email</label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Ex: jordyg">
+    </div>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if q and usuarios %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Login</th>
+          <th>Nome</th>
+          <th>Email</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in usuarios %}
+        <tr>
+          <td class="mono">{{ u.login }}</td>
+          <td>{{ u.nome }}</td>
+          <td>{{ u.email or '—' }}</td>
+          <td><span class="badge badge-{{ 'sucesso' if u.ativo else 'erro' }}">{{ 'Ativo' if u.ativo else 'Inativo' }}</span></td>
+          <td>
+            <button type="button" class="botao-olho" title="Gerenciar" onclick="abrirModalPiramide('{{ u.login }}')">
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif q and not erro %}
+  <div class="estado-vazio">Nenhum usuário encontrado.</div>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-piramide" onclick="fecharModalPiramideFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="piramide-modal-nome">—</div>
+        <div class="modal-subtitulo" id="piramide-modal-login">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharModalPiramide()">&times;</button>
+    </div>
+
+    <div class="aviso aviso-erro" id="piramide-modal-erro" style="display:none; margin:14px 20px 0;"></div>
+
+    <div style="padding:16px 20px;">
+      <div class="detalhe-rotulo" style="margin-bottom:10px;">Dados</div>
+      <div class="form-horario" style="margin-bottom:16px;">
+        <label for="piramide-nome">Nome</label>
+        <input type="text" id="piramide-nome">
+
+        <label for="piramide-email" style="margin-top:8px; display:block;">Email</label>
+        <input type="text" id="piramide-email">
+
+        <div id="piramide-resultado-dados" style="margin:10px 0; font-size:13px;"></div>
+        <button type="button" class="btn btn-primario" onclick="piramideSalvarDados()">Salvar dados</button>
+      </div>
+
+      <hr style="border-color:var(--border); margin:18px 0;">
+
+      <p style="font-size:13px; color:var(--text-secondary);">Login secundário: <span id="piramide-login-secundario">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Cargo: <span id="piramide-cargo">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Móvel: <span id="piramide-mobile">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Última alteração: <span id="piramide-ultima-alteracao">—</span></p>
+
+      <hr style="border-color:var(--border); margin:18px 0;">
+
+      <p style="font-size:13px; color:var(--text-secondary);">Status: <span class="badge badge-pendente" id="piramide-status-atual">—</span></p>
+      <div id="piramide-resultado-status" style="margin:8px 0; font-size:13px;"></div>
+      <button type="button" class="btn btn-primario" onclick="piramideDefinirAtivo(true)">Ativar</button>
+      <button type="button" class="btn btn-primario" onclick="piramideDefinirAtivo(false)" style="background:var(--danger);">Inativar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let piramideLoginAtual = null;
+
+  async function abrirModalPiramide(login) {
+    piramideLoginAtual = login;
+    const modal = document.getElementById('modal-piramide');
+    modal.classList.add('aberto');
+    document.getElementById('piramide-modal-nome').textContent = 'Carregando…';
+    document.getElementById('piramide-modal-login').textContent = '';
+    document.getElementById('piramide-modal-erro').style.display = 'none';
+    document.getElementById('piramide-resultado-dados').textContent = '';
+    document.getElementById('piramide-resultado-status').textContent = '';
+
+    try {
+      const resposta = await fetch(`/painel/api/piramide/usuario/${login}`);
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        document.getElementById('piramide-modal-erro').style.display = 'block';
+        document.getElementById('piramide-modal-erro').textContent = dados.erro || 'Falha ao carregar.';
+        return;
+      }
+
+      document.getElementById('piramide-modal-nome').textContent = dados.nome || '(sem nome)';
+      document.getElementById('piramide-modal-login').textContent = dados.login || '';
+      document.getElementById('piramide-nome').value = dados.nome || '';
+      document.getElementById('piramide-email').value = dados.email || '';
+      document.getElementById('piramide-login-secundario').textContent = dados.login_secundario || '—';
+      document.getElementById('piramide-cargo').textContent = dados.cargo || '—';
+      document.getElementById('piramide-mobile').textContent = dados.mobile ? 'Sim' : 'Não';
+      document.getElementById('piramide-ultima-alteracao').textContent = dados.ultima_alteracao || '—';
+      atualizarStatusPiramide(dados.ativo);
+    } catch (e) {
+      document.getElementById('piramide-modal-nome').textContent = 'Falha ao carregar.';
+    }
+  }
+
+  function fecharModalPiramide() {
+    document.getElementById('modal-piramide').classList.remove('aberto');
+    piramideLoginAtual = null;
+  }
+
+  function fecharModalPiramideFora(evento) {
+    if (evento.target.id === 'modal-piramide') fecharModalPiramide();
+  }
+
+  function atualizarStatusPiramide(ativo) {
+    const badge = document.getElementById('piramide-status-atual');
+    badge.textContent = ativo ? 'Ativo' : 'Inativo';
+    badge.className = `badge badge-${ativo ? 'sucesso' : 'erro'}`;
+  }
+
+  async function piramideSalvarDados() {
+    if (!piramideLoginAtual) return;
+    const resultado = document.getElementById('piramide-resultado-dados');
+    resultado.className = '';
+    resultado.textContent = 'Salvando…';
+
+    const corpo = new URLSearchParams({
+      nome: document.getElementById('piramide-nome').value,
+      email: document.getElementById('piramide-email').value,
+    });
+
+    try {
+      const resposta = await fetch(`/painel/api/piramide/usuario/${piramideLoginAtual}/dados`, { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      document.getElementById('piramide-modal-nome').textContent = dados.nome;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao salvar os dados.';
+    }
+  }
+
+  async function piramideDefinirAtivo(ativo) {
+    if (!piramideLoginAtual) return;
+    const resultado = document.getElementById('piramide-resultado-status');
+    resultado.className = '';
+    resultado.textContent = 'Atualizando…';
+
+    try {
+      const resposta = await fetch(`/painel/api/piramide/usuario/${piramideLoginAtual}/ativo`, {
+        method: 'POST', body: new URLSearchParams({ ativo: ativo ? '1' : '' }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      atualizarStatusPiramide(dados.ativo);
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao atualizar o status.';
+    }
+  }
+</script>
+{% endblock %}
