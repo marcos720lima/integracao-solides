@@ -1,7 +1,6 @@
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -19,10 +18,15 @@ DEFAULT_RETRY_TOTAL = 3
 DEFAULT_RETRY_BACKOFF = 1.0
 DEFAULT_WORKPLACE_CACHE_TTL_SECONDS = 600
 DEFAULT_JOB_ROLE_CACHE_TTL_SECONDS = 600
+DEFAULT_EMPLOYEES_CACHE_TTL_SECONDS = 90
 LOCAL_TZ = timezone(timedelta(hours=-3))
 
 WORKPLACE_CACHE = {"expires_at": 0.0, "name_map": {}}
 JOB_ROLE_CACHE = {"expires_at": 0.0, "name_map": {}}
+EMPLOYEES_CACHE = {
+    "ativos": {"expires_at": 0.0, "itens": []},
+    "demitidos": {"expires_at": 0.0, "itens": []},
+}
 
 
 class TangerinoConfigError(Exception):
@@ -193,12 +197,30 @@ def _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, a
     return resultado
 
 
+def get_employees_cache_ttl_seconds() -> int:
+    return max(15, _get_int_env("EMPLOYEES_CACHE_TTL_SECONDS", DEFAULT_EMPLOYEES_CACHE_TTL_SECONDS))
+
+
+def _buscar_employees_por_particao_cacheado(session, headers, timeout, show_fired_flag, api_page_size=200):
+    chave = "demitidos" if show_fired_flag == 1 else "ativos"
+    cache = EMPLOYEES_CACHE[chave]
+    now = time.time()
+
+    if cache["itens"] and cache["expires_at"] > now:
+        return cache["itens"]
+
+    itens = _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, api_page_size)
+    cache["itens"] = itens
+    cache["expires_at"] = now + get_employees_cache_ttl_seconds()
+    return itens
+
+
 def buscar_todos_employees_brutos(session, headers, timeout, api_page_size=200, incluir_demitidos=True):
-    ativos = _buscar_employees_por_particao(session, headers, timeout, 0, api_page_size)
+    ativos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 0, api_page_size)
     if not incluir_demitidos:
         return ativos
 
-    demitidos = _buscar_employees_por_particao(session, headers, timeout, 1, api_page_size)
+    demitidos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 1, api_page_size)
     vistos = {emp.get("id") for emp in ativos if isinstance(emp.get("id"), int)}
     combinados = list(ativos)
     for emp in demitidos:
