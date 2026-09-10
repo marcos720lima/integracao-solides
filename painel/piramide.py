@@ -63,10 +63,13 @@ def buscar_usuarios(termo, limite=50):
             cursor.execute(
                 f"""
                 SELECT u.nom_usuario_login, u.nom_usuario, u.dsc_email, u.cod_situacao,
-                       u.cod_unid_origem, o.dsc_unid_origem
+                       u.cod_unid_origem, o.dsc_unid_origem,
+                       u.cod_perfil, p.nom_perfil
                 FROM {schema}.usuario u
                 LEFT JOIN {schema}.unidade_origem o
                        ON o.cod_unid_origem = u.cod_unid_origem
+                LEFT JOIN {schema}.perfil p
+                       ON p.cod_perfil = u.cod_perfil
                 WHERE UPPER(u.nom_usuario_login) LIKE :termo
                    OR UPPER(u.nom_usuario) LIKE :termo
                    OR UPPER(u.dsc_email) LIKE :termo
@@ -85,8 +88,11 @@ def buscar_usuarios(termo, limite=50):
             "ativo": situacao == "A",
             "origem_codigo": origem_codigo,
             "origem": origem_desc,
+            "perfil_codigo": perfil_codigo,
+            "perfil": perfil_nome,
         }
-        for login, nome, email, situacao, origem_codigo, origem_desc in linhas
+        for (login, nome, email, situacao, origem_codigo, origem_desc,
+             perfil_codigo, perfil_nome) in linhas
     ]
 
 
@@ -99,10 +105,13 @@ def obter_usuario(login):
                 f"""
                 SELECT u.nom_usuario_login, u.nom_usuario, u.dsc_email, u.cod_situacao,
                        u.cod_login_secundario, u.ind_usuario_mobile, u.cod_cargo,
-                       u.dat_ult_alteracao, u.cod_unid_origem, o.dsc_unid_origem
+                       u.dat_ult_alteracao, u.cod_unid_origem, o.dsc_unid_origem,
+                       u.cod_perfil, p.nom_perfil
                 FROM {schema}.usuario u
                 LEFT JOIN {schema}.unidade_origem o
                        ON o.cod_unid_origem = u.cod_unid_origem
+                LEFT JOIN {schema}.perfil p
+                       ON p.cod_perfil = u.cod_perfil
                 WHERE u.nom_usuario_login = :login
                 """,
                 login=login,
@@ -113,7 +122,7 @@ def obter_usuario(login):
         return None
 
     (login, nome, email, situacao, login_secundario, mobile, cargo,
-     ult_alteracao, origem_codigo, origem_desc) = linha
+     ult_alteracao, origem_codigo, origem_desc, perfil_codigo, perfil_nome) = linha
     return {
         "login": login,
         "nome": nome,
@@ -124,6 +133,8 @@ def obter_usuario(login):
         "cargo": cargo,
         "origem_codigo": origem_codigo,
         "origem": origem_desc,
+        "perfil_codigo": perfil_codigo,
+        "perfil": perfil_nome,
         "ultima_alteracao": ult_alteracao.strftime("%d/%m/%Y %H:%M") if ult_alteracao else None,
     }
 

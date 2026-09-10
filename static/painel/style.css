@@ -660,7 +660,11 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
 }
 
 .campo input[type="text"],
-.campo input[type="password"] {
+.campo input[type="password"],
+.campo input[type="email"],
+.campo input[type="date"],
+.campo select,
+.campo textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 9px 11px;
@@ -668,12 +672,68 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
   font-family: var(--font-ui);
   background: var(--card-bg);
   color: var(--text-primary);
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.campo input:focus {
+.campo select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
+}
+
+.campo select option {
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+
+[data-theme="escuro"] .campo select,
+[data-theme="escuro"] .campo input[type="date"] { color-scheme: dark; }
+
+.modal-secao select,
+.modal-secao input[type="number"],
+.modal-secao input[type="text"],
+.modal-secao input[type="email"] {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: var(--font-ui);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-secao select { cursor: pointer; }
+
+.modal-secao select:focus,
+.modal-secao input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+[data-theme="escuro"] .modal-secao select,
+[data-theme="escuro"] .modal-secao input { color-scheme: dark; }
+
+.campo input:focus,
+.campo select:focus,
+.campo textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.campo input:disabled,
+.campo select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .checkbox-grid {

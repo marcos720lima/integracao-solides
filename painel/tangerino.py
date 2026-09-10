@@ -166,45 +166,12 @@ def _extract_items_and_total_pages(data):
     return [], None
 
 
-def _fetch_single_page(session, url, headers, timeout, params):
-    r = session.get(url, headers=headers, params=params, timeout=timeout)
-    debug_url = r.url
-    r.raise_for_status()
-    items, total_pages = _extract_items_and_total_pages(r.json())
-    return items, total_pages, debug_url
-
-
 def _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, api_page_size=200):
-    resultado = []
-    vistos = set()
-    page = 0
-    total_pages = None
-
-    while True:
-        items, total_pages_found, _ = _fetch_single_page(
-            session, EMPLOYEE_API_URL, headers, timeout,
-            {"showFired": show_fired_flag, "page": page, "size": api_page_size, "managerDetails": "true"},
-        )
-        if total_pages is None:
-            total_pages = total_pages_found
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            chave = item.get("id")
-            if chave is not None:
-                if chave in vistos:
-                    continue
-                vistos.add(chave)
-            resultado.append(item)
-
-        if total_pages is not None and page >= (total_pages - 1):
-            break
-        if not items:
-            break
-        page += 1
-
-    return resultado
+    return _paginar_tudo(
+        session, EMPLOYEE_API_URL, headers, timeout,
+        {"showFired": show_fired_flag, "managerDetails": "true"},
+        api_page_size,
+    )
 
 
 def get_employees_cache_ttl_seconds() -> int:
@@ -292,21 +259,81 @@ def build_job_role_name_map(job_roles) -> dict:
     return result
 
 
-def _fetch_all_pages(session, url, headers, timeout, api_page_size):
-    page = 0
+def _fetch_page_com_meta(session, url, headers, timeout, params):
+    r = session.get(url, headers=headers, params=params, timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    items, total_pages = _extract_items_and_total_pages(data)
+    meta = {}
+    if isinstance(data, dict):
+        meta = {"number": data.get("number"), "last": data.get("last")}
+    return items, total_pages, meta
+
+
+def _paginar_tudo(session, url, headers, timeout, params_base, api_page_size, chave_dedup=None):
+    """A API do Tangerino usa paginacao 1-based: page=0 e page=1 devolvem os dois
+    a primeira pagina (number=0). Comeca pedindo page=1 e usa o campo 'number' da
+    resposta pra detectar se o servidor e 1-based ou 0-based, em vez de assumir."""
+    if chave_dedup is None:
+        chave_dedup = lambda item: item.get("id")
+
+    itens = []
+    vistos = set()
+    numeros_vistos = set()
     total_pages = None
-    all_items = []
+    page = 1
+    primeira_requisicao = True
+
     while True:
-        items, total_pages_found, _ = _fetch_single_page(session, url, headers, timeout, {"page": page, "size": api_page_size})
-        all_items.extend(items)
+        params = dict(params_base)
+        params.update({"page": page, "size": api_page_size})
+        lote, total_pages_encontrado, meta = _fetch_page_com_meta(session, url, headers, timeout, params)
+
         if total_pages is None:
-            total_pages = total_pages_found
-        if total_pages is not None and page >= (total_pages - 1):
+            total_pages = total_pages_encontrado
+        numero = meta.get("number")
+
+        if primeira_requisicao and numero == 1:
+            # Servidor 0-based: pedir page=1 pulou a primeira pagina. Recomeca do zero.
+            primeira_requisicao = False
+            page = 0
+            continue
+        primeira_requisicao = False
+
+        if isinstance(numero, int):
+            if numero in numeros_vistos:
+                # Servidor devolveu de novo uma pagina ja lida: nao esta avancando.
+                break
+            numeros_vistos.add(numero)
+
+        novos = 0
+        for item in lote:
+            if not isinstance(item, dict):
+                continue
+            chave = chave_dedup(item)
+            if chave is not None:
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+            itens.append(item)
+            novos += 1
+
+        if meta.get("last") is True:
             break
-        if not items:
+        if total_pages is not None and isinstance(numero, int) and len(numeros_vistos) >= total_pages:
+            break
+        if not lote:
+            break
+        if novos == 0 and not isinstance(numero, int):
+            # Sem metadado de pagina e nada novo veio: evita loop infinito.
             break
         page += 1
-    return all_items
+
+    return itens
+
+
+def _fetch_all_pages(session, url, headers, timeout, api_page_size):
+    return _paginar_tudo(session, url, headers, timeout, {}, api_page_size)
 
 
 def get_workplace_name_map_cached(session, headers, timeout, api_page_size) -> dict:
@@ -336,37 +363,17 @@ def _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_si
     if VACATION_CACHE["itens"] and VACATION_CACHE["expires_at"] > now:
         return VACATION_CACHE["itens"]
 
-    resultado = []
-    vistos = set()
-    page = 0
-    total_pages = None
+    def chave_ferias(it):
+        chave = it.get("id")
+        if chave is None:
+            emp = it.get("employeeDTO") or {}
+            chave = (emp.get("id") or emp.get("email") or emp.get("name"), it.get("startDate"), it.get("endDate"), it.get("status"))
+        return chave
 
-    while True:
-        items, total_pages_found, _ = _fetch_single_page(
-            session, ADJUSTMENT_API_URL, headers, timeout,
-            {"adjustmentReasonId": 1, "page": page, "size": api_page_size},
-        )
-        if total_pages is None:
-            total_pages = total_pages_found
-
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            chave = it.get("id")
-            if chave is None:
-                emp = it.get("employeeDTO") or {}
-                chave = (emp.get("id") or emp.get("email") or emp.get("name"), it.get("startDate"), it.get("endDate"), it.get("status"))
-            if chave in vistos:
-                continue
-            vistos.add(chave)
-            resultado.append(it)
-
-        if total_pages is not None and page >= (total_pages - 1):
-            break
-        if not items:
-            break
-        page += 1
-
+    resultado = _paginar_tudo(
+        session, ADJUSTMENT_API_URL, headers, timeout,
+        {"adjustmentReasonId": 1}, api_page_size, chave_dedup=chave_ferias,
+    )
     VACATION_CACHE["itens"] = resultado
     VACATION_CACHE["expires_at"] = now + get_employees_cache_ttl_seconds()
     return resultado

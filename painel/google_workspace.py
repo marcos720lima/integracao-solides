@@ -9,14 +9,68 @@ def _sem_login_registrado(valor):
     return not valor or str(valor).startswith("1970-01-01")
 
 
+PARTICULAS = {"da", "de", "do", "das", "dos", "e"}
+
+
+def _limpar(palavra):
+    return palavra.replace("'", "").replace('"', "").replace("*", "")
+
+
+def _montar_query_busca(termo):
+    """A Directory API so aceita valor sem espaco depois de 'campo:'. Termo com
+    espaco quebra a query (Invalid Input: query), entao ancora na primeira e na
+    ultima palavra e o filtro fino fica por conta de _corresponde_ao_termo."""
+    palavras = [p for p in termo.split() if p]
+    if not palavras:
+        return None, []
+
+    primeira = _limpar(palavras[0])
+    ultima = _limpar(palavras[-1])
+    if not primeira and not ultima:
+        return None, []
+
+    if len(palavras) == 1:
+        return f"email:{primeira}* OR givenName:{primeira}* OR familyName:{primeira}*", palavras
+
+    partes = []
+    if primeira:
+        partes.append(f"email:{primeira}*")
+        partes.append(f"givenName:{primeira}*")
+    if ultima:
+        partes.append(f"familyName:{ultima}*")
+    return " OR ".join(partes), palavras
+
+
+def _corresponde_ao_termo(usuario, palavras):
+    relevantes = [p for p in palavras if p.lower() not in PARTICULAS]
+    if not relevantes:
+        return True
+    alvo = f"{usuario.get('nome', '')} {usuario.get('email', '')}".lower()
+    return all(p.lower() in alvo for p in relevantes)
+
+
 def listar_usuarios(query=None, max_resultados=500):
     service = obter_service_admin()
 
-    parametros = {"customer": "my_customer", "maxResults": min(max_resultados, 500), "orderBy": "givenName"}
+    base = {"customer": "my_customer", "maxResults": min(max_resultados, 500), "orderBy": "givenName"}
+    palavras_filtro = []
+    consulta = None
     if query:
-        termo = query.strip()
-        parametros["query"] = f"email:{termo}* OR givenName:{termo}* OR familyName:{termo}*"
+        consulta, palavras_filtro = _montar_query_busca(query.strip())
 
+    if consulta:
+        try:
+            resultado = _coletar_usuarios(service, dict(base, query=consulta), palavras_filtro, max_resultados)
+        except Exception:
+            resultado = []
+        if resultado:
+            return resultado
+
+    # Sem termo, ou a busca do servidor nao achou nada: varre o dominio e filtra aqui.
+    return _coletar_usuarios(service, dict(base), palavras_filtro, max_resultados)
+
+
+def _coletar_usuarios(service, parametros, palavras_filtro, max_resultados):
     usuarios = []
     page_token = None
     paginas = 0
@@ -29,14 +83,16 @@ def listar_usuarios(query=None, max_resultados=500):
         for u in resposta.get("users", []):
             nome = u.get("name", {})
             ultimo_login = u.get("lastLoginTime")
-            usuarios.append({
+            usuario = {
                 "email": u.get("primaryEmail", ""),
                 "nome": nome.get("fullName") or f"{nome.get('givenName', '')} {nome.get('familyName', '')}".strip(),
                 "suspenso": bool(u.get("suspended")),
                 "admin": bool(u.get("isAdmin")),
                 "unidade_organizacional": u.get("orgUnitPath", "/"),
                 "ultimo_login": None if _sem_login_registrado(ultimo_login) else ultimo_login,
-            })
+            }
+            if _corresponde_ao_termo(usuario, palavras_filtro):
+                usuarios.append(usuario)
 
         page_token = resposta.get("nextPageToken")
         paginas += 1
