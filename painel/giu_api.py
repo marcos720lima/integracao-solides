@@ -20,6 +20,7 @@ import sys
 import time
 import json
 import requests
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -40,6 +41,27 @@ class GiuError(Exception):
     pass
 
 
+class GiuConfigError(GiuError):
+    """Credenciais ou ambiente da API do GIU nao configurados."""
+
+
+def normalizar_login(valor):
+    """O login no GIU e o CPF sem pontuacao."""
+    digitos = "".join(c for c in str(valor or "") if c.isdigit())
+    return digitos or str(valor or "").strip()
+
+
+def formatar_data_java(valor):
+    """A API serializa LocalDateTime como [ano, mes, dia, hora, min, seg]."""
+    if isinstance(valor, list) and len(valor) >= 3:
+        try:
+            partes = (list(valor) + [0, 0, 0])[:6]
+            return datetime(*partes).strftime("%d/%m/%Y %H:%M")
+        except (TypeError, ValueError):
+            return None
+    return valor
+
+
 class GiuClient:
     def __init__(self, usuario=None, senha=None, ambiente=None, id_unimed=None):
         self.usuario = usuario or os.getenv("GIU_CLIENT_ID") or os.getenv("GIU_USUARIO")
@@ -50,9 +72,11 @@ class GiuClient:
         )
 
         if ambiente not in AMBIENTES:
-            raise GiuError(f"Ambiente invalido: {ambiente}. Use 'hml' ou 'prd'.")
+            raise GiuConfigError(f"Ambiente invalido: {ambiente}. Use 'hml' ou 'prd'.")
         if not self.usuario or not self.senha:
-            raise GiuError("Credenciais do GIU nao configuradas no .env.")
+            raise GiuConfigError(
+                "GIU_CLIENT_ID/GIU_CLIENT_SECRET nao configurados no .env."
+            )
 
         self.base_url = AMBIENTES[ambiente]
         self.ambiente = ambiente
@@ -140,7 +164,9 @@ class GiuClient:
     def consultar_usuario_por_login(self, login):
         """GET /api/usuario-unimed/obtem-por-login -> lista de vinculos, ou None."""
         resp = self._request(
-            "GET", "/api/usuario-unimed/obtem-por-login", params={"login": login}
+            "GET",
+            "/api/usuario-unimed/obtem-por-login",
+            params={"login": normalizar_login(login)},
         )
         if resp.status_code == 404:
             return None
@@ -150,6 +176,7 @@ class GiuClient:
 
     def resumo_usuario(self, login):
         """Achata o retorno da consulta no que interessa para o painel."""
+        login = normalizar_login(login)
         vinculos = self.consultar_usuario_por_login(login)
         if not vinculos:
             return {"login": login, "encontrado": False}
@@ -176,12 +203,24 @@ class GiuClient:
             "cpf": doc.get("numeroDocumento"),
             "telefone": colab.get("telefone"),
             "status": colab.get("status"),  # ATIVO / INATIVO / PENDENTE
-            "ultimo_acesso": colab.get("ultimoAcesso"),
+            "ultimo_acesso": formatar_data_java(colab.get("ultimoAcesso")),
             "tipo": tipo,
             "unimed": (primeiro.get("unimed") or {}).get("nome"),
             "perfil": (primeiro.get("perfil") or {}).get("nome"),
             "aplicacoes": aplicacoes,
         }
+
+    def consultar_status(self, login):
+        """Contrato usado pelo painel: ("ativo"|"inativo", detalhe) ou (3, None)."""
+        r = self.resumo_usuario(login)
+        if not r["encontrado"]:
+            return 3, None
+        status = (r.get("status") or "").upper()
+        if status == "ATIVO":
+            return "ativo", r.get("nome")
+        if status in ("INATIVO", "PENDENTE"):
+            return "inativo", r.get("nome")
+        return "erro", f"Status inesperado: {r.get('status')}"
 
     def auditar(self, logins, pausa=0.2, on_erro=None):
         """Consulta uma lista de logins e agrupa por situacao."""
@@ -238,6 +277,65 @@ class GiuClient:
     # NOTA: inativacao e edicao de usuario NAO existem na giu-api v3.1.73.
     # O contrato so tem POST (criacao) e um unico PUT (aceite de termo de uso).
     # Essas operacoes seguem no rpa_giu.py ate a Unimed do Brasil expor endpoints.
+
+
+# ------------------------------------- API de modulo (padrao do painel)
+
+_cliente = None
+
+
+def _obter_cliente():
+    global _cliente
+    if _cliente is None:
+        _cliente = GiuClient()
+    return _cliente
+
+
+def buscar_usuarios(termo, limite=50):
+    """A giu-api so consulta por login exato (CPF sem pontuacao).
+
+    Nao existe endpoint de listagem ou busca parcial, entao o retorno tem
+    no maximo um usuario. O parametro limite existe so por simetria com os
+    outros modulos do painel.
+    """
+    login = normalizar_login(termo)
+    if len(login) not in (11, 14):
+        raise GiuError(
+            "O GIU so permite busca pelo CPF ou CNPJ completo (o login e o "
+            "proprio documento, sem pontuacao)."
+        )
+
+    usuario = _obter_cliente().resumo_usuario(login)
+    return [usuario] if usuario.get("encontrado") else []
+
+
+def obter_usuario(login):
+    usuario = _obter_cliente().resumo_usuario(login)
+    return usuario if usuario.get("encontrado") else None
+
+
+def definir_ativo(login, ativo):
+    """Ativa ou inativa via RPA: a giu-api nao expoe essa operacao.
+
+    Retorna (ok, mensagem) no mesmo formato dos demais modulos do painel.
+    """
+    from rpa_giu import (
+        executar_giu_automatico,
+        SUCESSO,
+        JA_NO_ESTADO_DESEJADO,
+        NAO_ENCONTRADO,
+    )
+
+    acao = "ativar" if ativo else "desativar"
+    codigo = executar_giu_automatico(normalizar_login(login), acao=acao)
+
+    if codigo == SUCESSO:
+        return True, f"Usuario {'ativado' if ativo else 'inativado'} no GIU."
+    if codigo == JA_NO_ESTADO_DESEJADO:
+        return True, f"Usuario ja estava {'ativo' if ativo else 'inativo'} no GIU."
+    if codigo == NAO_ENCONTRADO:
+        return False, "Usuario nao encontrado no GIU."
+    return False, "Falha ao executar o robo do GIU. Verifique os logs."
 
 
 # ------------------------------------------------------------------ execucao

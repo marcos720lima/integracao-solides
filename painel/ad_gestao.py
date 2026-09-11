@@ -332,6 +332,117 @@ def ad_definir_bloqueio(sam, bloquear):
     return True, ("Conta bloqueada com sucesso." if bloquear else "Conta desbloqueada com sucesso.")
 
 
+def ad_buscar_detalhes_por_sam(sam):
+    """Busca os dados de um colaborador para exibicao estilo AD (aba Geral).
+
+    Mapeamento de campos:
+      - setor            -> description
+      - PIN da impressora -> wWWHomePage (campo "Pagina da Web" no AD)
+      - CPF              -> employeeID (aba Editor de Atributos no AD)
+    """
+    conn, base_dn = _conexao_ad()
+
+    safe_sam = sam.replace("\\", "\\5c").replace("(", "\\28").replace(")", "\\29").replace("*", "\\2a")
+    conn.search(
+        search_base=base_dn,
+        search_filter=f"(&(objectCategory=person)(objectClass=user)(sAMAccountName={safe_sam}))",
+        search_scope=SUBTREE,
+        attributes=[
+            "displayName", "givenName", "sn", "sAMAccountName", "mail",
+            "description", "wWWHomePage", "employeeID", "userAccountControl",
+            "distinguishedName",
+        ],
+        size_limit=2,
+    )
+
+    if len(conn.entries) != 1:
+        conn.unbind()
+        return None
+
+    entry = conn.entries[0]
+    e = entry.entry_attributes_as_dict
+    uac = e.get("userAccountControl")
+    disabled = bool(int(uac[0]) & 2) if isinstance(uac, list) and uac else False
+    dn = entry.entry_dn
+
+    def _primeiro(campo):
+        valor = e.get(campo)
+        return (valor or [""])[0] if isinstance(valor, list) else (valor or "")
+
+    resultado = {
+        "displayName": _primeiro("displayName"),
+        "givenName": _primeiro("givenName"),
+        "sn": _primeiro("sn"),
+        "sam": _primeiro("sAMAccountName"),
+        "mail": _primeiro("mail"),
+        "setor": _primeiro("description"),
+        "pin_impressora": _primeiro("wWWHomePage"),
+        "cpf": _primeiro("employeeID"),
+        "disabled": disabled,
+        "ou": extract_ou_path(dn),
+    }
+    conn.unbind()
+    return resultado
+
+
+def ad_atualizar_dados_gerais(sam, nome=None, email=None, setor=None, pin_impressora=None, cpf=None):
+    """Atualiza os dados da aba Geral no AD.
+
+    Campos: nome -> displayName/givenName/sn (+ rename do CN);
+            email -> mail; setor -> description;
+            pin_impressora -> wWWHomePage; cpf -> employeeID.
+    Passe None para nao alterar um campo; "" limpa o valor.
+    """
+    conn, base_dn = _conexao_ad()
+
+    safe_sam = sam.replace("\\", "\\5c").replace("(", "\\28").replace(")", "\\29").replace("*", "\\2a")
+    conn.search(
+        search_base=base_dn,
+        search_filter=f"(&(objectCategory=person)(objectClass=user)(sAMAccountName={safe_sam}))",
+        search_scope=SUBTREE, attributes=["distinguishedName"], size_limit=2,
+    )
+    if len(conn.entries) != 1:
+        conn.unbind()
+        return False, f"Usuário não encontrado (ou duplicado): {sam}"
+
+    dn = conn.entries[0].entry_dn
+
+    alteracoes = {}
+    if email is not None:
+        alteracoes["mail"] = [(MODIFY_REPLACE, [email])]
+    if setor is not None:
+        alteracoes["description"] = [(MODIFY_REPLACE, [setor] if setor else [])]
+    if pin_impressora is not None:
+        alteracoes["wWWHomePage"] = [(MODIFY_REPLACE, [pin_impressora] if pin_impressora else [])]
+    if cpf is not None:
+        alteracoes["employeeID"] = [(MODIFY_REPLACE, [cpf] if cpf else [])]
+    if nome is not None and nome.strip():
+        partes = nome.strip().split(" ", 1)
+        primeiro = partes[0]
+        sobrenome = partes[1] if len(partes) > 1 else primeiro
+        alteracoes["displayName"] = [(MODIFY_REPLACE, [nome.strip()])]
+        alteracoes["givenName"] = [(MODIFY_REPLACE, [primeiro])]
+        alteracoes["sn"] = [(MODIFY_REPLACE, [sobrenome])]
+
+    if alteracoes:
+        ok = conn.modify(dn, alteracoes)
+        if not ok:
+            motivo = (conn.result or {}).get("message") or "Falha ao atualizar os dados no AD."
+            conn.unbind()
+            return False, motivo
+
+    # rename do CN por ultimo (muda o DN), so quando o nome mudou
+    if nome is not None and nome.strip():
+        cn = re.sub(r'[,+"\\<>;=]', "", nome.strip())
+        try:
+            conn.modify_dn(dn, f"CN={cn}")
+        except Exception:
+            pass  # dados ja salvos; rename do CN e cosmetico
+
+    conn.unbind()
+    return True, "Dados atualizados com sucesso."
+
+
 def ad_buscar_por_sam(sam):
     conn, base_dn = _conexao_ad()
 

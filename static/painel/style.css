@@ -1036,7 +1036,14 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
 
 .webhook-resumo:hover { background: var(--surface-subtle); }
 
-.webhook-status { flex-shrink: 0; width: 108px; }
+.webhook-status {
+  flex-shrink: 0;
+  width: 108px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
 
 .webhook-nome {
   flex: 1;
@@ -1089,6 +1096,39 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
   color: var(--text-muted);
   font-weight: 600;
   margin-bottom: 3px;
+}
+
+.detalhe-linha {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.detalhe-linha:last-child { border-bottom: none; }
+
+.rotulo-campo {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.detalhe-linha .detalhe-rotulo {
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
+.detalhe-linha > span:last-child {
+  text-align: right;
+  color: var(--text-primary);
+  word-break: break-word;
 }
 
 .webhook-detalhe-grid > div { font-size: 12.5px; color: var(--text-primary); }
@@ -1325,4 +1365,117 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
   .sidebar { display: none; }
   .content { padding: 20px; }
   .form-grid { grid-template-columns: 1fr; }
+}
+
+/* Dica: icone "i" circulado com balao de informacao (hover e foco) */
+.dica {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: help;
+  outline: none;
+}
+
+.dica-icone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  color: var(--card-bg);
+  font-size: 10px;
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+  transition: background 0.12s ease;
+}
+
+.dica:hover .dica-icone,
+.dica:focus .dica-icone {
+  background: var(--accent);
+}
+
+.dica-balao {
+  position: fixed;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--text-primary);
+  color: var(--card-bg);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: normal;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.14s ease, visibility 0.14s ease;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.dica-balao::after {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: var(--seta-x, 50%);
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-bottom-color: var(--text-primary);
+}
+
+.dica-balao.dica-balao-invertido::after {
+  bottom: auto;
+  top: 100%;
+  border-bottom-color: transparent;
+  border-top-color: var(--text-primary);
+}
+
+.dica.dica-aberta .dica-balao {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ---------- modal do colaborador AD: inputs no padrao do sistema + botoes proporcionais ---------- */
+#modal-colab-ad input[type="text"],
+#modal-colab-ad input[type="password"],
+#modal-colab-ad input[type="email"],
+#modal-colab-ad select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-family: var(--font-ui);
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+
+#modal-colab-ad input:focus,
+#modal-colab-ad select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+[data-theme="escuro"] #modal-colab-ad select { color-scheme: dark; }
+
+#modal-colab-ad .btn {
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+#modal-colab-ad .btn-limpar-filtros {
+  padding: 6px 12px;
+  font-size: 12px;
 }

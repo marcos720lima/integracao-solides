@@ -10,6 +10,33 @@ from playwright.sync_api import sync_playwright
 load_dotenv()
 
 GIU_URL = os.getenv('GIU_URL', 'https://giu.unimed.coop.br')
+
+# ZenRows Scraping Browser: resolve o desafio Cloudflare Turnstile no IP deles.
+# Autorizado pela Unimed do Brasil (Edmilson) para a integracao com o GIU.
+ZENROWS_API_KEY = os.getenv('ZENROWS_API_KEY', '').strip()
+ZENROWS_BROWSER_WSS = os.getenv(
+    'ZENROWS_BROWSER_WSS', 'wss://browser.zenrows.com'
+).strip()
+# Regiao do proxy do ZenRows. 'sa' (America do Sul) evita timeout ao alcancar
+# servidores no Brasil, como o GIU. Vazio ou 'global' usa saida mundial.
+ZENROWS_PROXY_REGION = os.getenv('ZENROWS_PROXY_REGION', 'sa').strip()
+# Duracao da sessao do navegador remoto, em segundos (min 60, max 900). O padrao
+# do ZenRows e 180s (3 min), curto demais para login + navegacao + inativacao.
+def _normalizar_ttl(valor):
+    """ZenRows espera duracao como string (ex: '10m', '90s'). Converte numero
+    puro de segundos para esse formato."""
+    valor = (valor or "").strip().lower()
+    if not valor:
+        return ""
+    if valor.endswith("m") or valor.endswith("s"):
+        return valor
+    if valor.isdigit():
+        seg = int(valor)
+        return f"{seg // 60}m" if seg % 60 == 0 else f"{seg}s"
+    return valor
+
+
+ZENROWS_SESSION_TTL = _normalizar_ttl(os.getenv('ZENROWS_SESSION_TTL', '10m'))
 GIU_USERNAME = os.getenv('GIU_USERNAME')
 GIU_PASSWORD = os.getenv('GIU_PASSWORD')
 
@@ -31,6 +58,26 @@ INATIVO_STATUS = "inativo"
 
 
 def consultar_status_giu(cpf_usuario):
+    """Consulta o status do usuario no GIU.
+
+    Tenta primeiro a API oficial (giu-api), que e instantanea e nao depende de
+    navegador nem passa pelo desafio do Cloudflare. Se a API nao estiver
+    configurada ou falhar, cai no RPA por Playwright.
+    """
+    try:
+        from painel.giu_api import GiuClient, GiuError
+
+        giu = GiuClient()
+        return giu.consultar_status(cpf_usuario)
+    except ImportError:
+        print("[GIU] Cliente da API indisponivel; usando RPA.", file=sys.stderr)
+    except Exception as exc:
+        print(f"[GIU] API falhou ({exc}); caindo para o RPA.", file=sys.stderr)
+
+    return _consultar_status_giu_rpa(cpf_usuario)
+
+
+def _consultar_status_giu_rpa(cpf_usuario):
     if not GIU_USERNAME or not GIU_PASSWORD:
         return ERRO, "GIU_USERNAME/GIU_PASSWORD não definidos no .env."
 
@@ -39,9 +86,13 @@ def consultar_status_giu(cpf_usuario):
             browser = None
             context = None
             try:
-                browser = p.chromium.launch(**_opcoes_lancamento(**tentativa))
-                context = browser.new_context(ignore_https_errors=True)
-                page = context.new_page()
+                browser, usou_zenrows = _abrir_browser(p, tentativa)
+                if usou_zenrows:
+                    context = browser.contexts[0] if browser.contexts else browser.new_context(ignore_https_errors=True)
+                    page = context.pages[0] if context.pages else context.new_page()
+                else:
+                    context = browser.new_context(ignore_https_errors=True)
+                    page = context.new_page()
 
                 base_url = GIU_URL.rstrip("/")
                 page.goto(f"{base_url}/login", timeout=60000)
@@ -58,6 +109,7 @@ def consultar_status_giu(cpf_usuario):
                 )
 
                 if not campo_usuario or not campo_senha:
+                    _capturar_diagnostico(page, "login")
                     return ERRO, "Campos de login não encontrados."
 
                 campo_usuario.fill(GIU_USERNAME or "")
@@ -72,7 +124,22 @@ def consultar_status_giu(cpf_usuario):
                     return ERRO, "Botão de login não encontrado."
 
                 botao_login.click()
-                time.sleep(5)
+                # via sessao remota o GIU pode demorar a processar e redirecionar;
+                # espera ativamente sair da tela de login antes de decidir.
+                for _ in range(20):
+                    time.sleep(1)
+                    try:
+                        corpo_tmp = (page.content() or "").lower()
+                        if any(m in corpo_tmp for m in
+                               ("gerenciar usu", "suas aplica", "meu perfil")):
+                            break
+                    except Exception:
+                        pass
+
+                bloqueio = _detectar_bloqueio_login(page, base_url)
+                if bloqueio:
+                    _capturar_diagnostico(page, "poslogin")
+                    return ERRO, bloqueio
 
                 page.goto(f"{base_url}/gerenciarUsuarios", timeout=30000)
                 page.wait_for_load_state("domcontentloaded")
@@ -131,6 +198,16 @@ def consultar_status_giu(cpf_usuario):
                         page.evaluate("(el) => el.click()", handle)
                 time.sleep(3)
 
+                # aguarda a tela de edicao abrir (rota "Editar usuario")
+                for _ in range(15):
+                    try:
+                        corpo_ed = (page.content() or "").lower()
+                        if "editar usu" in corpo_ed or "dados b" in corpo_ed or "status da conta" in corpo_ed:
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(1)
+
                 try:
                     status_texto = page.locator(
                         "span.fonte-secundaria.texto.label-campo, span:has-text('ATIVO'), span:has-text('INATIVO'), span:has-text('INATIVA')"
@@ -167,7 +244,7 @@ TENTATIVAS_EXECUCAO = [
 ]
 
 
-def _first_visible(page, selectors, timeout=8000):
+def _first_visible(page, selectors, timeout=15000):
     for selector in selectors:
         try:
             locator = page.locator(selector).first
@@ -200,6 +277,96 @@ def _opcoes_lancamento(headless, usar_chrome):
     return opcoes
 
 
+def _capturar_diagnostico(page, prefixo):
+    """Salva screenshot e HTML da pagina atual, para inspecionar o que o
+    navegador remoto (ZenRows) carregou quando algo nao e encontrado."""
+    import datetime
+    carimbo = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"giu_debug_{prefixo}_{carimbo}"
+    try:
+        page.screenshot(path=f"{base}.png", full_page=True)
+        print(f"[GIU] Screenshot salvo em {base}.png", file=sys.stderr)
+    except Exception as e:
+        print(f"[GIU] Falha ao salvar screenshot: {e}", file=sys.stderr)
+    try:
+        with open(f"{base}.html", "w", encoding="utf-8") as f:
+            f.write(page.content() or "")
+        print(f"[GIU] HTML salvo em {base}.html", file=sys.stderr)
+    except Exception as e:
+        print(f"[GIU] Falha ao salvar HTML: {e}", file=sys.stderr)
+    try:
+        print(f"[GIU] URL no momento da falha: {page.url}", file=sys.stderr)
+    except Exception:
+        pass
+
+
+def _detectar_bloqueio_login(page, base_url):
+    """Apos o clique em Entrar, distingue bloqueio Cloudflare de login normal.
+
+    Retorna uma mensagem de erro se detectar que o login nao passou, ou None
+    se seguiu para dentro do sistema. Sem isso, um bloqueio do Turnstile faz o
+    fluxo reportar "usuario nao encontrado", mascarando a real causa.
+    """
+    try:
+        url_atual = (page.url or "").lower()
+    except Exception:
+        url_atual = ""
+    try:
+        corpo = (page.content() or "").lower()
+    except Exception:
+        corpo = ""
+
+    # Verificacao POSITIVA de que entrou: a home da versao 9.1.16 mostra o menu
+    # e os cards. Se qualquer marca de "logado" aparece, o login passou -
+    # independentemente da URL (SPA Vue usa rota em hash e pode manter "login"
+    # em pedacos do bundle).
+    marcas_logado = [
+        "gerenciar usu", "suas aplica", "meu perfil", "sair do portal",
+        "mainacessoautorizado",
+    ]
+    if any(m in corpo for m in marcas_logado):
+        return None
+
+    # Nao confirmou login. Distingue desafio Cloudflare de credencial recusada.
+    if True:
+        marcas_desafio = [
+            "desafio de verifica", "challenge", "turnstile", "cf-chl",
+            "cloudflare", "verify you are human", "confirme que voc",
+        ]
+        if any(m in corpo for m in marcas_desafio):
+            return ("Bloqueado pelo desafio Cloudflare (Turnstile) na tela de "
+                    "login. Verifique a integracao com o ZenRows "
+                    "(ZENROWS_API_KEY).")
+        return "Login nao concluido (ainda na tela de login apos enviar as credenciais)."
+    return None
+
+
+def _abrir_browser(p, tentativa):
+    """Abre o navegador para o RPA do GIU.
+
+    Se ZENROWS_API_KEY estiver definido, conecta ao Scraping Browser do ZenRows
+    via CDP: a navegacao roda na infraestrutura deles, que resolve o desafio
+    Cloudflare Turnstile no proprio IP. Caso contrario, lanca o Chromium local
+    (comportamento antigo, que nao passa pelo Turnstile).
+
+    Retorna (browser, usou_zenrows).
+    """
+    if ZENROWS_API_KEY:
+        params = [f"apikey={ZENROWS_API_KEY}"]
+        if ZENROWS_PROXY_REGION and ZENROWS_PROXY_REGION.lower() != 'global':
+            params.append(f"proxy_region={ZENROWS_PROXY_REGION}")
+        if ZENROWS_SESSION_TTL:
+            params.append(f"session_ttl={ZENROWS_SESSION_TTL}")
+        # nao duplica apikey se a URL base ja trouxer query string
+        base = ZENROWS_BROWSER_WSS.split('?', 1)[0]
+        url = base + '?' + '&'.join(params)
+        browser = p.chromium.connect_over_cdp(url, timeout=120000)
+        return browser, True
+
+    browser = p.chromium.launch(**_opcoes_lancamento(**tentativa))
+    return browser, False
+
+
 def _erro_navegador_fechado(exc):
     msg = str(exc)
     return "Target page, context or browser has been closed" in msg or "TargetClosedError" in msg
@@ -222,9 +389,13 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
             context = None
 
             try:
-                browser = p.chromium.launch(**_opcoes_lancamento(**tentativa))
-                context = browser.new_context(ignore_https_errors=True)
-                page = context.new_page()
+                browser, usou_zenrows = _abrir_browser(p, tentativa)
+                if usou_zenrows:
+                    context = browser.contexts[0] if browser.contexts else browser.new_context(ignore_https_errors=True)
+                    page = context.pages[0] if context.pages else context.new_page()
+                else:
+                    context = browser.new_context(ignore_https_errors=True)
+                    page = context.new_page()
 
                 base_url = GIU_URL.rstrip("/")
                 page.goto(f"{base_url}/login", timeout=60000)
@@ -250,6 +421,7 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
                 )
 
                 if not campo_usuario or not campo_senha:
+                    _capturar_diagnostico(page, "login")
                     print("[GIU] Campos de login não encontrados.", file=sys.stderr)
                     return ERRO
 
@@ -272,24 +444,94 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
                     return ERRO
 
                 botao_login.click()
-                time.sleep(5)
+                # via sessao remota o GIU pode demorar a processar e redirecionar;
+                # espera ativamente sair da tela de login antes de decidir.
+                for _ in range(20):
+                    time.sleep(1)
+                    try:
+                        corpo_tmp = (page.content() or "").lower()
+                        if any(m in corpo_tmp for m in
+                               ("gerenciar usu", "suas aplica", "meu perfil")):
+                            break
+                    except Exception:
+                        pass
 
-                page.goto(f"{base_url}/gerenciarUsuarios", timeout=30000)
-                page.wait_for_load_state("domcontentloaded")
-                time.sleep(3)
+                bloqueio = _detectar_bloqueio_login(page, base_url)
+                if bloqueio:
+                    _capturar_diagnostico(page, "poslogin")
+                    print(f"[GIU] {bloqueio}", file=sys.stderr)
+                    return ERRO
 
-                campo_busca = _first_visible(
-                    page,
-                    [
-                        "input[placeholder*='Buscar Nome']",
-                        "input[placeholder*='Buscar']",
-                        "input[placeholder*='CPF']",
-                        "input[type='search']",
-                        "input[type='text']",
-                    ],
-                )
+                # Navega ate "Gerenciar usuarios". Na SPA Vue 9.1.16 o deep-link
+                # por URL nem sempre dispara a rota, entao ha um plano B: clicar
+                # no card/menu "Gerenciar usuarios" da home.
+                seletores_busca = [
+                    "input[placeholder*='Buscar Nome']",
+                    "input[placeholder*='Login do usu']",
+                    "input[placeholder*='Buscar']",
+                    "input[placeholder*='documento']",
+                    "input[type='search']",
+                ]
+                campo_busca = None
+
+                # Estrategia 1: clicar no card "Gerenciar usuarios" da home (ja
+                # estamos nela apos o login). O card tem id proprio; clicamos nele
+                # ou em qualquer ancestral clicavel.
+                def _tentar_card():
+                    for sel in [
+                        "#id_gerenciar_usuarios_card",
+                        "div.cartao-icone:has-text('Gerenciar')",
+                        "h2:has-text('Gerenciar usuários')",
+                        "div:has-text('Gerenciar usuários')",
+                    ]:
+                        try:
+                            loc = page.locator(sel).first
+                            if loc.count() and loc.is_visible():
+                                loc.scroll_into_view_if_needed(timeout=3000)
+                                loc.click(timeout=4000)
+                                return True
+                        except Exception:
+                            continue
+                    # ultimo recurso: clique via JS no card por id
+                    try:
+                        page.evaluate(
+                            "document.querySelector('#id_gerenciar_usuarios_card')?.click()"
+                        )
+                        return True
+                    except Exception:
+                        return False
+
+                for tentativa_nav in range(3):
+                    if tentativa_nav == 0:
+                        _tentar_card()
+                    elif tentativa_nav == 1:
+                        # deep-link direto
+                        try:
+                            page.goto(f"{base_url}/#/gerenciarUsuarios", timeout=20000)
+                        except Exception:
+                            pass
+                    else:
+                        # volta pra home e tenta o card de novo
+                        try:
+                            page.goto(f"{base_url}/#/home", timeout=15000)
+                            time.sleep(1.5)
+                        except Exception:
+                            pass
+                        _tentar_card()
+
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=8000)
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    campo_busca = _first_visible(page, seletores_busca, timeout=6000)
+                    if campo_busca:
+                        break
+
                 if not campo_busca:
-                    print("[GIU] Campo de busca não encontrado.", file=sys.stderr)
+                    _capturar_diagnostico(page, "gerenciar")
+                    print(f"[GIU] Campo de busca não encontrado. URL: {page.url}",
+                          file=sys.stderr)
                     return ERRO
 
                 campo_busca.fill(cpf_usuario)
@@ -319,13 +561,18 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
 
                 try:
                     icone_editar = page.locator(
-                        "div.icone-acao.habilitado:visible, "
-                        "[class*='icone-acao'][class*='habilitado']:visible, "
-                        "button[aria-label*='Editar']:visible"
+                        "tbody div.icone-acao.habilitado, "
+                        "td div.icone-acao.habilitado, "
+                        "div.icone-acao.habilitado, "
+                        "[class*='icone-acao'][class*='habilitado']"
                     )
                     if icone_editar.count() == 0:
+                        # pode ser que a interface abra o cadastro ao clicar na
+                        # propria linha do resultado; captura para inspecao.
+                        _capturar_diagnostico(page, "resultado_busca")
                         return NAO_ENCONTRADO
                 except Exception:
+                    _capturar_diagnostico(page, "resultado_busca")
                     return NAO_ENCONTRADO
 
                 alvo = icone_editar.first
@@ -346,19 +593,35 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
                         page.evaluate("(el) => el.click()", handle)
                 time.sleep(3)
 
-                try:
-                    status_texto = page.locator(
-                        "span.fonte-secundaria.texto.label-campo, span:has-text('ATIVO'), span:has-text('INATIVO'), span:has-text('INATIVA')"
-                    ).first
-                    status_atual = status_texto.inner_text().strip().upper()
+                # aguarda a tela de edicao abrir (rota "Editar usuario")
+                for _ in range(15):
+                    try:
+                        corpo_ed = (page.content() or "").lower()
+                        if "editar usu" in corpo_ed or "dados b" in corpo_ed or "status da conta" in corpo_ed:
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(1)
 
-                    inativo = "INATIVA" in status_atual or "INATIVO" in status_atual
+                # Le o estado atual. O rotulo do toggle tem classe "verdadeiro"
+                # (ATIVA) ou "falso" (INATIVA), mais confiavel que so o texto.
+                inativo = None
+                try:
+                    label_status = page.locator("span.label-campo").first
+                    classe = (label_status.get_attribute("class") or "").lower()
+                    texto = (label_status.inner_text() or "").strip().upper()
+                    if "verdadeiro" in classe or "ATIVA" in texto or "ATIVO" in texto:
+                        inativo = False
+                    elif "falso" in classe or "INATIVA" in texto or "INATIVO" in texto:
+                        inativo = True
+                except Exception:
+                    inativo = None
+
+                if inativo is not None:
                     if acao == 'bloquear' and inativo:
                         return JA_NO_ESTADO_DESEJADO
                     if acao == 'desbloquear' and not inativo:
                         return JA_NO_ESTADO_DESEJADO
-                except Exception:
-                    pass
 
                 try:
                     toggle = _first_visible(
@@ -441,9 +704,14 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         cpf = sys.argv[1]
     else:
-        print("USO: python rpa_giu.py <cpf_usuario> [ativar|desativar]")
+        print("USO: python rpa_giu.py <cpf_usuario> [ativar|desativar|status]")
         sys.exit(1)
 
     acao = sys.argv[2].lower() if len(sys.argv) > 2 else 'desativar'
+
+    if acao == 'status':
+        status, detalhe = consultar_status_giu(cpf)
+        print(f"status={status} detalhe={detalhe}")
+        sys.exit(SUCESSO)
     resultado = executar_giu_automatico(cpf, acao)
     sys.exit(resultado)

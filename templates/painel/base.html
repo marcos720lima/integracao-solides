@@ -112,6 +112,17 @@
           </span>
           Pirâmide
         </a>
+        <a href="{{ url_for('painel.giu') }}" class="{{ 'ativo' if request.endpoint == 'painel.giu' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="10" cy="10" r="7.3" stroke="currentColor" stroke-width="1.4" fill="none"/>
+              <ellipse cx="10" cy="10" rx="3.2" ry="7.3" stroke="currentColor" stroke-width="1.4" fill="none"/>
+              <path d="M3 7.6h14M3 12.4h14" stroke="currentColor" stroke-width="1.4"/>
+              <circle cx="10" cy="10" r="7.3" fill="currentColor" fill-opacity="0.12"/>
+            </svg>
+          </span>
+          GIU Unimed
+        </a>
         <a href="{{ url_for('painel.logs') }}" class="{{ 'ativo' if request.endpoint == 'painel.logs' else '' }}">
           <span class="icon">
             <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">

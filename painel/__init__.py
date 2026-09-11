@@ -9,6 +9,8 @@ from painel.ad_gestao import (
     DAYS_PT,
     ad_buscar_por_employee_id,
     ad_buscar_por_sam,
+    ad_buscar_detalhes_por_sam,
+    ad_atualizar_dados_gerais,
     ad_definir_bloqueio,
     ad_redefinir_senha,
     ad_search_users,
@@ -38,6 +40,10 @@ from painel.infomed import obter_usuario as infomed_obter_usuario
 from painel.infomed import editar_dados as infomed_editar_dados
 from painel.infomed import alterar_perfil as infomed_alterar_perfil
 from painel.infomed import PERFIS_CONHECIDOS as INFOMED_PERFIS_CONHECIDOS
+from painel.giu_api import GiuConfigError, GiuError
+from painel.giu_api import buscar_usuarios as giu_buscar_usuarios
+from painel.giu_api import obter_usuario as giu_obter_usuario
+from painel.giu_api import definir_ativo as giu_definir_ativo
 from painel.piramide import PiramideConfigError, buscar_usuarios as piramide_buscar_usuarios
 from painel.piramide import definir_ativo as piramide_definir_ativo
 from painel.piramide import obter_usuario as piramide_obter_usuario
@@ -698,6 +704,46 @@ def api_colaborador_sistemas_rpa_status(job_id):
     return jsonify({"sistemas": sistemas, "concluido": job["concluido"]})
 
 
+@painel_bp.route("/api/usuarios-ad/detalhes/<sam>")
+@login_obrigatorio
+def api_ad_detalhes(sam):
+    try:
+        dados = ad_buscar_detalhes_por_sam(sam)
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o Active Directory: {e}"}), 502
+    if not dados:
+        return jsonify({"erro": "Colaborador não encontrado no AD."}), 404
+    return jsonify(dados)
+
+
+@painel_bp.route("/api/usuarios-ad/atualizar-geral", methods=["POST"])
+@login_obrigatorio
+def api_ad_atualizar_geral():
+    sam = (request.form.get("sam") or "").strip()
+    if not sam:
+        return jsonify({"erro": "sam é obrigatório."}), 400
+
+    def _campo(nome):
+        v = request.form.get(nome)
+        return v.strip() if v is not None else None
+
+    try:
+        ok, mensagem = ad_atualizar_dados_gerais(
+            sam,
+            nome=_campo("nome"),
+            email=_campo("email"),
+            setor=_campo("setor"),
+            pin_impressora=_campo("pin_impressora"),
+            cpf=_campo("cpf"),
+        )
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem})
+
+
 @painel_bp.route("/api/usuarios-ad/redefinir-senha", methods=["POST"])
 @login_obrigatorio
 def api_ad_redefinir_senha():
@@ -1142,6 +1188,57 @@ def api_piramide_definir_ativo(login):
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
         return jsonify({"erro": f"Falha ao atualizar o Pirâmide: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, "ativo": ativo})
+
+
+@painel_bp.route("/giu", endpoint="giu")
+@login_obrigatorio
+def tela_giu():
+    q = request.args.get("q", "").strip()
+    erro = None
+    usuarios = []
+
+    if q:
+        try:
+            usuarios = giu_buscar_usuarios(q)
+        except GiuConfigError as e:
+            erro = str(e)
+        except GiuError as e:
+            erro = str(e)
+        except Exception as e:
+            erro = f"Falha ao consultar o GIU: {e}"
+
+    return render_template("giu.html", q=q, usuarios=usuarios, erro=erro)
+
+
+@painel_bp.route("/api/giu/usuario/<login>")
+@login_obrigatorio
+def api_giu_usuario(login):
+    try:
+        usuario = giu_obter_usuario(login)
+    except GiuConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o GIU: {e}"}), 502
+
+    if not usuario:
+        return jsonify({"erro": "Usuário não encontrado no GIU."}), 404
+    return jsonify(usuario)
+
+
+@painel_bp.route("/api/giu/usuario/<login>/ativo", methods=["POST"])
+@login_obrigatorio
+def api_giu_definir_ativo(login):
+    ativo = request.form.get("ativo") == "1"
+    try:
+        ok, mensagem = giu_definir_ativo(login, ativo)
+    except GiuConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao atualizar o GIU: {e}"}), 502
 
     if not ok:
         return jsonify({"erro": mensagem}), 400

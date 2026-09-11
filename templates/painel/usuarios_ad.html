@@ -4,7 +4,7 @@
 {% block conteudo %}
 <div class="page-header">
   <h1>Active Directory</h1>
-  <p>Busca de usuários no Active Directory e edição do horário permitido de acesso (logonHours).</p>
+  <p>Busca de colaboradores no Active Directory, com edição de dados, horário de acesso e senha.</p>
 </div>
 
 {% if erro %}
@@ -56,7 +56,7 @@
           <th>Email</th>
           <th>Status</th>
           <th>Setor (OU)</th>
-          <th>Horários</th>
+          <th>Colaborador</th>
         </tr>
       </thead>
       <tbody>
@@ -68,12 +68,9 @@
           <td><span class="badge badge-{{ 'erro' if u.disabled else 'sucesso' }}">{{ 'Desativado' if u.disabled else 'Ativo' }}</span></td>
           <td>{{ u.ou or '—' }}</td>
           <td>
-            <button type="button" class="botao-olho" title="Ver/editar horário" onclick='abrirModalHorarioAD({{ u.sam|tojson }}, {{ u.displayName|tojson }}, {{ u.hours|tojson }})'>
-              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
-                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
-                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
-              </svg>
+            <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+                    onclick='abrirColaboradorAD({{ u.sam|tojson }}, {{ u.displayName|tojson }}, {{ u.disabled|tojson }}, {{ u.hours|tojson }})'>
+              Ver colab.
             </button>
           </td>
         </tr>
@@ -101,42 +98,110 @@
   {% endif %}
 </div>
 
-<div class="modal-overlay" id="modal-horario-ad" onclick="fecharModalHorarioADFora(event)">
+<div class="modal-overlay" id="modal-colab-ad" onclick="fecharColaboradorADFora(event)">
   <div class="modal-card">
     <div class="modal-header">
       <div>
-        <div class="modal-titulo" id="horario-ad-nome">—</div>
-        <div class="modal-subtitulo" id="horario-ad-sam">—</div>
+        <div class="modal-titulo" id="colab-ad-nome">—</div>
+        <div class="modal-subtitulo" id="colab-ad-sam">—</div>
       </div>
-      <button type="button" class="modal-fechar" onclick="fecharModalHorarioAD()">&times;</button>
+      <button type="button" class="modal-fechar" onclick="fecharColaboradorAD()">&times;</button>
     </div>
 
-    <div style="padding:16px 20px;">
-      <div class="detalhe-rotulo">Horário atual</div>
-      <div class="mono" id="horario-ad-atual" style="font-size:12px; margin-bottom:16px;">—</div>
+    <div style="padding:0 20px;">
+      <div class="abas">
+        <button type="button" class="aba ativa" data-aba="geral" onclick="trocarAbaAD('geral')">Geral</button>
+        <button type="button" class="aba" data-aba="horarios" onclick="trocarAbaAD('horarios')">Horários liberados</button>
+        <button type="button" class="aba" data-aba="senha" onclick="trocarAbaAD('senha')">Senha</button>
+      </div>
+    </div>
 
-      <form id="form-horario-ad" class="form-horario" onsubmit="event.preventDefault(); salvarHorarioAD();">
-        <button type="button" class="btn-limpar-filtros" style="margin-bottom:10px; width:100%; text-align:center;" onclick="predefinirHorarioAdministrativoAD()">Predefinir horário administrativo</button>
+    <div style="padding:4px 20px 20px;">
+      <!-- ABA GERAL (editável) -->
+      <div class="aba-conteudo" id="aba-ad-geral">
+        <div class="aviso aviso-erro" id="colab-ad-erro" style="display:none;"></div>
+        <div id="colab-ad-carregando" style="font-size:13px; color:var(--text-secondary);">Carregando dados do colaborador…</div>
 
-        <select name="edit_mode" class="seletor-modo-horario" onchange="alternarModoHorarioAD(this)" style="margin-bottom:10px;">
-          <option value="todos">Todos os dias</option>
-          <option value="personalizado">Personalizado por dia</option>
-        </select>
-        <div class="modo-todos-dias">
-          <input type="text" name="ranges_all" placeholder="07:00-12:00,14:00-18:00">
-        </div>
-        <div class="modo-personalizado" style="display:none;">
-          <input type="text" class="intervalo-dia" name="ranges_seg" placeholder="Segunda: 07:00-12:00,14:00-18:00" disabled>
-          <input type="text" class="intervalo-dia" name="ranges_ter" placeholder="Terça: 07:00-12:00,14:00-18:00" disabled>
-          <input type="text" class="intervalo-dia" name="ranges_qua" placeholder="Quarta: 07:00-12:00,14:00-18:00" disabled>
-          <input type="text" class="intervalo-dia" name="ranges_qui" placeholder="Quinta: 07:00-12:00,14:00-18:00" disabled>
-          <input type="text" class="intervalo-dia" name="ranges_sex" placeholder="Sexta: 07:00-12:00,14:00-18:00" disabled>
-          <input type="text" class="intervalo-dia" name="ranges_sab" placeholder="Sábado: 07:00-12:00,14:00-18:00" disabled>
-          <input type="text" class="intervalo-dia" name="ranges_dom" placeholder="Domingo: 07:00-12:00,14:00-18:00" disabled>
-        </div>
-        <div id="horario-ad-resultado" style="margin-top:10px; font-size:13px;"></div>
-        <button type="submit" class="btn btn-primario" style="margin-top:10px;">Salvar horário</button>
-      </form>
+        <form id="form-geral-ad" style="display:none;" onsubmit="event.preventDefault(); salvarGeralAD();">
+          <label class="rotulo-campo" for="ad-nome">Nome completo</label>
+          <input type="text" id="ad-nome" name="nome" style="margin-bottom:10px;">
+
+          <label class="rotulo-campo" for="ad-email">Email</label>
+          <input type="text" id="ad-email" name="email" style="margin-bottom:10px;">
+
+          <label class="rotulo-campo" for="ad-setor">Setor</label>
+          <input type="text" id="ad-setor" name="setor" style="margin-bottom:10px;">
+
+          <label class="rotulo-campo" for="ad-pin">PIN da impressora</label>
+          <input type="text" id="ad-pin" name="pin_impressora" style="margin-bottom:10px;">
+
+          <label class="rotulo-campo" for="ad-cpf">CPF</label>
+          <input type="text" id="ad-cpf" name="cpf" style="margin-bottom:4px;">
+          <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
+            CPF e nome são usados para vincular este colaborador ao GIU e ao Sólides. Altere com cuidado.
+          </p>
+
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Usuário</span><span id="colab-ad-usuario" class="mono">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Status</span><span id="colab-ad-status">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Setor (OU)</span><span id="colab-ad-ou">—</span></div>
+
+          <div id="geral-ad-resultado" style="margin:12px 0; font-size:13px;"></div>
+          <button type="submit" class="btn btn-primario" style="width:100%;">Salvar alterações</button>
+        </form>
+      </div>
+
+      <!-- ABA HORÁRIOS LIBERADOS -->
+      <div class="aba-conteudo" id="aba-ad-horarios" style="display:none;">
+        <div class="detalhe-rotulo">Horário atual</div>
+        <div class="mono" id="horario-ad-atual" style="font-size:12px; margin-bottom:16px;">—</div>
+
+        <form id="form-horario-ad" class="form-horario" onsubmit="event.preventDefault(); salvarHorarioAD();">
+          <button type="button" class="btn-limpar-filtros" style="margin-bottom:10px; width:100%; text-align:center;" onclick="predefinirHorarioAdministrativoAD()">Predefinir horário administrativo</button>
+
+          <select name="edit_mode" class="seletor-modo-horario" onchange="alternarModoHorarioAD(this)" style="margin-bottom:10px;">
+            <option value="todos">Todos os dias</option>
+            <option value="personalizado">Personalizado por dia</option>
+          </select>
+          <div class="modo-todos-dias">
+            <input type="text" name="ranges_all" placeholder="07:00-12:00,14:00-18:00">
+          </div>
+          <div class="modo-personalizado" style="display:none;">
+            <input type="text" class="intervalo-dia" name="ranges_seg" placeholder="Segunda: 07:00-12:00,14:00-18:00" disabled>
+            <input type="text" class="intervalo-dia" name="ranges_ter" placeholder="Terça: 07:00-12:00,14:00-18:00" disabled>
+            <input type="text" class="intervalo-dia" name="ranges_qua" placeholder="Quarta: 07:00-12:00,14:00-18:00" disabled>
+            <input type="text" class="intervalo-dia" name="ranges_qui" placeholder="Quinta: 07:00-12:00,14:00-18:00" disabled>
+            <input type="text" class="intervalo-dia" name="ranges_sex" placeholder="Sexta: 07:00-12:00,14:00-18:00" disabled>
+            <input type="text" class="intervalo-dia" name="ranges_sab" placeholder="Sábado: 07:00-12:00,14:00-18:00" disabled>
+            <input type="text" class="intervalo-dia" name="ranges_dom" placeholder="Domingo: 07:00-12:00,14:00-18:00" disabled>
+          </div>
+          <div id="horario-ad-resultado" style="margin-top:10px; font-size:13px;"></div>
+          <button type="submit" class="btn btn-primario" style="margin-top:10px; width:100%;">Salvar horário</button>
+        </form>
+      </div>
+
+      <!-- ABA SENHA -->
+      <div class="aba-conteudo" id="aba-ad-senha" style="display:none;">
+        <div class="detalhe-rotulo" style="margin-bottom:10px;">Redefinir senha</div>
+        <form id="form-senha-ad" onsubmit="event.preventDefault(); salvarSenhaAD();">
+          <input type="password" id="ad-senha-1" placeholder="Nova senha" autocomplete="new-password" style="margin-bottom:8px;">
+          <input type="password" id="ad-senha-2" placeholder="Repita a nova senha" autocomplete="new-password" style="margin-bottom:8px;">
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-secondary); margin-bottom:12px;">
+            <input type="checkbox" id="ad-forcar-troca" checked style="width:auto;">
+            Exigir troca de senha no próximo logon
+          </label>
+          <div id="senha-ad-resultado" style="margin-bottom:10px; font-size:13px;"></div>
+          <button type="submit" class="btn btn-primario" style="width:100%;">Redefinir senha</button>
+        </form>
+
+        <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+
+        <div class="detalhe-rotulo" style="margin-bottom:10px;">Conta</div>
+        <div id="conta-ad-resultado" style="margin-bottom:10px; font-size:13px;"></div>
+        <button type="button" class="btn btn-primario" id="btn-ad-bloquear" style="width:100%; background:var(--danger);"
+                onclick="definirBloqueioAD(true)">Bloquear conta</button>
+        <button type="button" class="btn btn-primario" id="btn-ad-desbloquear" style="width:100%; margin-top:8px;"
+                onclick="definirBloqueioAD(false)">Desbloquear conta</button>
+      </div>
     </div>
   </div>
 </div>
@@ -144,24 +209,131 @@
 
 {% block scripts %}
 <script>
-  let horarioAdSamAtual = null;
+  let colabAdSam = null;
 
-  function abrirModalHorarioAD(sam, nome, horas) {
-    horarioAdSamAtual = sam;
-    document.getElementById('modal-horario-ad').classList.add('aberto');
-    document.getElementById('horario-ad-nome').textContent = nome;
-    document.getElementById('horario-ad-sam').textContent = sam;
-    document.getElementById('horario-ad-resultado').textContent = '';
+  function abrirColaboradorAD(sam, nome, disabled, horas) {
+    colabAdSam = sam;
+    document.getElementById('modal-colab-ad').classList.add('aberto');
+    document.getElementById('colab-ad-nome').textContent = nome || sam;
+    document.getElementById('colab-ad-sam').textContent = sam;
+    trocarAbaAD('geral');
 
+    // limpa mensagens
+    ['geral-ad-resultado', 'senha-ad-resultado', 'conta-ad-resultado', 'horario-ad-resultado'].forEach(id => {
+      const el = document.getElementById(id);
+      el.textContent = ''; el.className = '';
+    });
+    document.getElementById('form-senha-ad').reset();
+    document.getElementById('ad-forcar-troca').checked = true;
+    ajustarBotoesContaAD(disabled);
+
+    prepararHorarioAD(horas);
+    carregarDadosAD(sam);
+  }
+
+  async function carregarDadosAD(sam) {
+    const carregando = document.getElementById('colab-ad-carregando');
+    const form = document.getElementById('form-geral-ad');
+    const erro = document.getElementById('colab-ad-erro');
+    carregando.style.display = 'block';
+    form.style.display = 'none';
+    erro.style.display = 'none';
+
+    try {
+      const resp = await fetch(`/painel/api/usuarios-ad/detalhes/${encodeURIComponent(sam)}`);
+      const json = await resp.json();
+      if (!resp.ok) {
+        carregando.style.display = 'none';
+        erro.style.display = 'block';
+        erro.textContent = json.erro || 'Falha ao carregar.';
+        return;
+      }
+      document.getElementById('ad-nome').value = json.displayName || '';
+      document.getElementById('ad-email').value = json.mail || '';
+      document.getElementById('ad-setor').value = json.setor || '';
+      document.getElementById('ad-pin').value = json.pin_impressora || '';
+      document.getElementById('ad-cpf').value = json.cpf || '';
+      document.getElementById('colab-ad-usuario').textContent = json.sam || '—';
+      document.getElementById('colab-ad-ou').textContent = json.ou || '—';
+
+      const st = document.getElementById('colab-ad-status');
+      st.innerHTML = `<span class="badge badge-${json.disabled ? 'erro' : 'sucesso'}">${json.disabled ? 'Desativado' : 'Ativo'}</span>`;
+      ajustarBotoesContaAD(json.disabled);
+
+      carregando.style.display = 'none';
+      form.style.display = 'block';
+    } catch (e) {
+      carregando.style.display = 'none';
+      erro.style.display = 'block';
+      erro.textContent = 'Falha ao carregar os dados do colaborador.';
+    }
+  }
+
+  function ajustarBotoesContaAD(disabled) {
+    document.getElementById('btn-ad-bloquear').style.display = disabled ? 'none' : 'block';
+    document.getElementById('btn-ad-desbloquear').style.display = disabled ? 'block' : 'none';
+  }
+
+  function trocarAbaAD(aba) {
+    document.querySelectorAll('#modal-colab-ad .aba').forEach(b => {
+      b.classList.toggle('ativa', b.dataset.aba === aba);
+    });
+    document.getElementById('aba-ad-geral').style.display = aba === 'geral' ? 'block' : 'none';
+    document.getElementById('aba-ad-horarios').style.display = aba === 'horarios' ? 'block' : 'none';
+    document.getElementById('aba-ad-senha').style.display = aba === 'senha' ? 'block' : 'none';
+  }
+
+  function fecharColaboradorAD() {
+    document.getElementById('modal-colab-ad').classList.remove('aberto');
+    colabAdSam = null;
+  }
+
+  function fecharColaboradorADFora(evento) {
+    if (evento.target.id === 'modal-colab-ad') fecharColaboradorAD();
+  }
+
+  async function salvarGeralAD() {
+    if (!colabAdSam) return;
+    const resultado = document.getElementById('geral-ad-resultado');
+    resultado.className = '';
+
+    const nome = document.getElementById('ad-nome').value.trim();
+    if (!nome) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'O nome não pode ficar vazio.';
+      return;
+    }
+
+    const dados = new FormData();
+    dados.set('sam', colabAdSam);
+    dados.set('nome', nome);
+    dados.set('email', document.getElementById('ad-email').value.trim());
+    dados.set('setor', document.getElementById('ad-setor').value.trim());
+    dados.set('pin_impressora', document.getElementById('ad-pin').value.trim());
+    dados.set('cpf', document.getElementById('ad-cpf').value.trim());
+
+    resultado.textContent = 'Salvando…';
+    try {
+      const resp = await fetch("{{ url_for('painel.api_ad_atualizar_geral') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      resultado.className = resp.ok ? 'aviso aviso-sucesso' : 'aviso aviso-erro';
+      resultado.textContent = resp.ok ? json.mensagem : json.erro;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao salvar os dados.';
+    }
+  }
+
+  // ---------- horários ----------
+  function prepararHorarioAD(horas) {
     const atual = document.getElementById('horario-ad-atual');
     if (horas && horas['*']) {
       atual.textContent = horas['*'];
-    } else if (horas) {
+    } else if (horas && Object.keys(horas).length) {
       atual.innerHTML = Object.entries(horas).map(([dia, faixa]) => `${dia}: ${faixa}`).join('<br>');
     } else {
       atual.textContent = '—';
     }
-
     const form = document.getElementById('form-horario-ad');
     form.reset();
     form.querySelector('.modo-todos-dias').style.display = 'block';
@@ -170,27 +342,14 @@
     form.querySelector('input[name="ranges_all"]').disabled = false;
   }
 
-  function fecharModalHorarioAD() {
-    document.getElementById('modal-horario-ad').classList.remove('aberto');
-    horarioAdSamAtual = null;
-  }
-
-  function fecharModalHorarioADFora(evento) {
-    if (evento.target.id === 'modal-horario-ad') fecharModalHorarioAD();
-  }
-
   function alternarModoHorarioAD(select) {
     const form = select.closest('form');
-    const modoTodos = form.querySelector('.modo-todos-dias');
-    const modoPersonalizado = form.querySelector('.modo-personalizado');
-    const inputTodos = form.querySelector('input[name="ranges_all"]');
-    const inputsDias = form.querySelectorAll('.intervalo-dia');
-
     const personalizado = select.value === 'personalizado';
-    modoTodos.style.display = personalizado ? 'none' : 'block';
-    modoPersonalizado.style.display = personalizado ? 'block' : 'none';
+    form.querySelector('.modo-todos-dias').style.display = personalizado ? 'none' : 'block';
+    form.querySelector('.modo-personalizado').style.display = personalizado ? 'block' : 'none';
+    const inputTodos = form.querySelector('input[name="ranges_all"]');
     if (inputTodos) inputTodos.disabled = personalizado;
-    inputsDias.forEach(i => { i.disabled = !personalizado; });
+    form.querySelectorAll('.intervalo-dia').forEach(i => { i.disabled = !personalizado; });
   }
 
   function predefinirHorarioAdministrativoAD() {
@@ -201,7 +360,6 @@
 
     const horarioUtil = '07:00-12:00,14:00-19:00';
     const horarioSexta = '07:00-12:00,14:00-18:00';
-
     form.querySelector('input[name="ranges_seg"]').value = horarioUtil;
     form.querySelector('input[name="ranges_ter"]').value = horarioUtil;
     form.querySelector('input[name="ranges_qua"]').value = horarioUtil;
@@ -212,10 +370,10 @@
   }
 
   async function salvarHorarioAD() {
-    if (!horarioAdSamAtual) return;
+    if (!colabAdSam) return;
     const form = document.getElementById('form-horario-ad');
     const dados = new FormData(form);
-    dados.set('sam', horarioAdSamAtual);
+    dados.set('sam', colabAdSam);
     const resultado = document.getElementById('horario-ad-resultado');
     resultado.className = '';
     resultado.textContent = 'Salvando…';
@@ -228,6 +386,69 @@
     } catch (e) {
       resultado.className = 'aviso aviso-erro';
       resultado.textContent = 'Falha ao salvar o horário.';
+    }
+  }
+
+  // ---------- senha e conta ----------
+  async function salvarSenhaAD() {
+    if (!colabAdSam) return;
+    const s1 = document.getElementById('ad-senha-1').value;
+    const s2 = document.getElementById('ad-senha-2').value;
+    const resultado = document.getElementById('senha-ad-resultado');
+    resultado.className = '';
+
+    if (!s1) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Digite a nova senha.';
+      return;
+    }
+    if (s1 !== s2) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'As senhas não conferem.';
+      return;
+    }
+
+    const dados = new FormData();
+    dados.set('sam', colabAdSam);
+    dados.set('nova_senha', s1);
+    dados.set('forcar_troca', document.getElementById('ad-forcar-troca').checked ? '1' : '0');
+
+    resultado.textContent = 'Redefinindo…';
+    try {
+      const resp = await fetch("{{ url_for('painel.api_ad_redefinir_senha') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      resultado.className = resp.ok ? 'aviso aviso-sucesso' : 'aviso aviso-erro';
+      resultado.textContent = resp.ok ? json.mensagem : json.erro;
+      if (resp.ok) document.getElementById('form-senha-ad').reset();
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao redefinir a senha.';
+    }
+  }
+
+  async function definirBloqueioAD(bloquear) {
+    if (!colabAdSam) return;
+    const resultado = document.getElementById('conta-ad-resultado');
+    resultado.className = '';
+    resultado.textContent = bloquear ? 'Bloqueando…' : 'Desbloqueando…';
+
+    const dados = new FormData();
+    dados.set('sam', colabAdSam);
+    dados.set('bloquear', bloquear ? '1' : '0');
+
+    try {
+      const resp = await fetch("{{ url_for('painel.api_ad_definir_bloqueio') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      resultado.className = resp.ok ? 'aviso aviso-sucesso' : 'aviso aviso-erro';
+      resultado.textContent = resp.ok ? json.mensagem : json.erro;
+      if (resp.ok) {
+        ajustarBotoesContaAD(bloquear);
+        const st = document.getElementById('colab-ad-status');
+        st.innerHTML = `<span class="badge badge-${bloquear ? 'erro' : 'sucesso'}">${bloquear ? 'Desativado' : 'Ativo'}</span>`;
+      }
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao atualizar a conta.';
     }
   }
 </script>

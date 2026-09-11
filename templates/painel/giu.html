@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block titulo %}GIU Unimed{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>GIU Unimed</h1>
+  <p>Consulta pela API oficial da Unimed do Brasil — status, último acesso e aplicações. Ativar e inativar passam pelo robô.</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <div class="campo-toolbar campo-busca">
+      <label for="q">
+        Buscar pelo CPF ou CNPJ completo
+        <span class="dica" tabindex="0" role="button" aria-label="Mais informações sobre a busca">
+          <span class="dica-icone" aria-hidden="true">i</span>
+          <span class="dica-balao" role="tooltip">
+            O GIU não tem busca por nome ou e-mail: o login é o próprio documento, sem pontuação.
+          </span>
+        </span>
+      </label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Ex: 01876263245">
+    </div>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if q and usuarios %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Login</th>
+          <th>Nome</th>
+          <th>Email</th>
+          <th>Perfil</th>
+          <th>Último acesso</th>
+          <th>Aplicações</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in usuarios %}
+        <tr>
+          <td class="mono">{{ u.login }}</td>
+          <td>{{ u.nome or '—' }}</td>
+          <td>{{ u.email or '—' }}</td>
+          <td>{{ u.perfil or '—' }}</td>
+          <td>{{ u.ultimo_acesso or '—' }}</td>
+          <td class="mono">{{ u.aplicacoes | length }}</td>
+          <td>
+            <span class="badge badge-{{ 'sucesso' if u.status == 'ATIVO' else ('pendente' if u.status == 'PENDENTE' else 'erro') }}">
+              {{ u.status | capitalize if u.status else '—' }}
+            </span>
+          </td>
+          <td>
+            <button type="button" class="botao-olho" title="Gerenciar" onclick="abrirModalGiu('{{ u.login }}')">
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif q and not erro %}
+  <div class="estado-vazio">Nenhum usuário encontrado no GIU.</div>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-giu" onclick="fecharModalGiuFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="giu-modal-nome">—</div>
+        <div class="modal-subtitulo" id="giu-modal-login">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharModalGiu()">&times;</button>
+    </div>
+
+    <div class="aviso aviso-erro" id="giu-modal-erro" style="display:none; margin:14px 20px 0;"></div>
+
+    <div style="padding:16px 20px;">
+      <div class="detalhe-rotulo" style="margin-bottom:10px;">Dados</div>
+      <p style="font-size:13px; color:var(--text-secondary);">Email: <span id="giu-email">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Telefone: <span id="giu-telefone">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Unimed: <span id="giu-unimed">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Perfil: <span id="giu-perfil">—</span></p>
+      <p style="font-size:13px; color:var(--text-secondary);">Último acesso: <span id="giu-ultimo-acesso">—</span></p>
+
+      <p style="font-size:12px; color:var(--text-muted); margin-top:12px;">
+        A API do GIU não permite editar dados cadastrais. Alterações precisam ser feitas no portal.
+      </p>
+
+      <hr style="border-color:var(--border); margin:18px 0;">
+
+      <div class="detalhe-rotulo" style="margin-bottom:10px;">Aplicações e papéis</div>
+      <div id="giu-aplicacoes" style="font-size:13px;">—</div>
+
+      <hr style="border-color:var(--border); margin:18px 0;">
+
+      <p style="font-size:13px; color:var(--text-secondary);">Status: <span class="badge badge-pendente" id="giu-status-atual">—</span></p>
+      <p style="font-size:12px; color:var(--text-muted);">
+        Ativar e inativar são executados pelo robô e podem levar até um minuto.
+      </p>
+      <div id="giu-resultado-status" style="margin:8px 0; font-size:13px;"></div>
+      <button type="button" class="btn btn-primario" id="giu-btn-ativar" onclick="giuDefinirAtivo(true)">Ativar</button>
+      <button type="button" class="btn btn-primario" id="giu-btn-inativar" onclick="giuDefinirAtivo(false)" style="background:var(--danger);">Inativar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let giuLoginAtual = null;
+
+  async function abrirModalGiu(login) {
+    giuLoginAtual = login;
+    const modal = document.getElementById('modal-giu');
+    modal.classList.add('aberto');
+    document.getElementById('giu-modal-nome').textContent = 'Carregando…';
+    document.getElementById('giu-modal-login').textContent = '';
+    document.getElementById('giu-modal-erro').style.display = 'none';
+    document.getElementById('giu-resultado-status').textContent = '';
+    document.getElementById('giu-aplicacoes').textContent = '—';
+
+    try {
+      const resposta = await fetch(`/painel/api/giu/usuario/${login}`);
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        document.getElementById('giu-modal-erro').style.display = 'block';
+        document.getElementById('giu-modal-erro').textContent = dados.erro || 'Falha ao carregar.';
+        document.getElementById('giu-modal-nome').textContent = '—';
+        return;
+      }
+
+      document.getElementById('giu-modal-nome').textContent = dados.nome || '(sem nome)';
+      document.getElementById('giu-modal-login').textContent = dados.login || '';
+      document.getElementById('giu-email').textContent = dados.email || '—';
+      document.getElementById('giu-telefone').textContent = dados.telefone || '—';
+      document.getElementById('giu-unimed').textContent = dados.unimed || '—';
+      document.getElementById('giu-perfil').textContent = dados.perfil || '—';
+      document.getElementById('giu-ultimo-acesso').textContent = dados.ultimo_acesso || '—';
+      renderizarAplicacoesGiu(dados.aplicacoes || []);
+      atualizarStatusGiu(dados.status);
+    } catch (e) {
+      document.getElementById('giu-modal-nome').textContent = 'Falha ao carregar.';
+    }
+  }
+
+  function renderizarAplicacoesGiu(aplicacoes) {
+    const alvo = document.getElementById('giu-aplicacoes');
+    if (!aplicacoes.length) {
+      alvo.textContent = 'Nenhuma aplicação vinculada.';
+      return;
+    }
+    alvo.innerHTML = aplicacoes.map(app => {
+      const papeis = (app.papeis || []).filter(Boolean);
+      const lista = papeis.length
+        ? papeis.map(p => `<span class="badge badge-pendente" style="margin:2px 4px 2px 0;">${p}</span>`).join('')
+        : '<span style="color:var(--text-muted);">sem papéis</span>';
+      return `<div style="margin-bottom:10px;">
+                <div style="font-weight:600;">${app.nome || '(sem nome)'}</div>
+                <div style="margin-top:3px;">${lista}</div>
+              </div>`;
+    }).join('');
+  }
+
+  function fecharModalGiu() {
+    document.getElementById('modal-giu').classList.remove('aberto');
+    giuLoginAtual = null;
+  }
+
+  function fecharModalGiuFora(evento) {
+    if (evento.target.id === 'modal-giu') fecharModalGiu();
+  }
+
+  function atualizarStatusGiu(status) {
+    const badge = document.getElementById('giu-status-atual');
+    const s = (status || '').toUpperCase();
+    badge.textContent = s ? s.charAt(0) + s.slice(1).toLowerCase() : '—';
+    badge.className = `badge badge-${s === 'ATIVO' ? 'sucesso' : (s === 'PENDENTE' ? 'pendente' : 'erro')}`;
+  }
+
+  async function giuDefinirAtivo(ativo) {
+    if (!giuLoginAtual) return;
+    const resultado = document.getElementById('giu-resultado-status');
+    const btnAtivar = document.getElementById('giu-btn-ativar');
+    const btnInativar = document.getElementById('giu-btn-inativar');
+
+    resultado.className = '';
+    resultado.textContent = 'Executando o robô… isso pode levar até um minuto.';
+    btnAtivar.disabled = true;
+    btnInativar.disabled = true;
+
+    try {
+      const resposta = await fetch(`/painel/api/giu/usuario/${giuLoginAtual}/ativo`, {
+        method: 'POST', body: new URLSearchParams({ ativo: ativo ? '1' : '' }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      atualizarStatusGiu(dados.ativo ? 'ATIVO' : 'INATIVO');
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao atualizar o status.';
+    } finally {
+      btnAtivar.disabled = false;
+      btnInativar.disabled = false;
+    }
+  }
+
+  // Posiciona o balao de dica com position:fixed, calculando a partir do
+  // icone. Assim ele escapa do overflow:hidden do card e nunca e cortado.
+  (function () {
+    function posicionar(dica) {
+      const balao = dica.querySelector('.dica-balao');
+      if (!balao) return;
+      const r = dica.getBoundingClientRect();
+      // mede o balao ja visivel
+      const bw = balao.offsetWidth;
+      const bh = balao.offsetHeight;
+      const margem = 8;
+
+      // horizontal: centraliza no icone, sem vazar a viewport
+      let left = r.left + r.width / 2 - bw / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - bw - 8));
+
+      // vertical: abaixo do icone; se nao couber, acima
+      let top = r.bottom + margem;
+      let setaEmbaixo = false;
+      if (top + bh > window.innerHeight - 8) {
+        top = r.top - bh - margem;
+        setaEmbaixo = true;
+      }
+
+      balao.style.left = left + 'px';
+      balao.style.top = top + 'px';
+
+      // posiciona a seta apontando para o centro do icone
+      const seta = r.left + r.width / 2 - left;
+      balao.style.setProperty('--seta-x', seta + 'px');
+      balao.classList.toggle('dica-balao-invertido', setaEmbaixo);
+    }
+
+    function abrir(dica) {
+      dica.classList.add('dica-aberta');
+      // precisa estar visivel para medir; mede no proximo frame
+      requestAnimationFrame(() => posicionar(dica));
+    }
+    function fechar(dica) {
+      dica.classList.remove('dica-aberta');
+    }
+
+    document.querySelectorAll('.dica').forEach((dica) => {
+      dica.addEventListener('mouseenter', () => abrir(dica));
+      dica.addEventListener('mouseleave', () => fechar(dica));
+      dica.addEventListener('focus', () => abrir(dica));
+      dica.addEventListener('blur', () => fechar(dica));
+      // toque: alterna
+      dica.addEventListener('click', (e) => {
+        e.preventDefault();
+        dica.classList.contains('dica-aberta') ? fechar(dica) : abrir(dica);
+      });
+    });
+  })();
+</script>
+{% endblock %}
