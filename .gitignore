@@ -39,3 +39,8 @@ test-results/
 testes/
 ferias/
 screenshots_debug/
+echo data/*.txt >> .gitignore
+echo nextqs_debug_*.png >> .gitignore
+echo giu_debug_*.png >> .gitignore
+echo giu_debug_*.html >> .gitignoredata/ferias_log.txt 
+nextqs_debug_login.png 
