@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block titulo %}NextQS{% endblock %}
+
+{% block conteudo %}
+<div class="page-header">
+  <h1>NextQS</h1>
+  <p>Consulta pela API oficial do NextQS — nome, email e perfil. Status e inativação passam pelo robô.</p>
+</div>
+
+{% if erro %}
+<div class="aviso aviso-erro">{{ erro }}</div>
+{% endif %}
+
+<div class="card-panel">
+  <form method="GET" class="toolbar-historico">
+    <div class="campo-toolbar campo-busca">
+      <label for="email">
+        Buscar pelo email do colaborador
+        <span class="dica" tabindex="0" role="button" aria-label="Mais informações sobre a busca">
+          <span class="dica-icone" aria-hidden="true">i</span>
+          <span class="dica-balao" role="tooltip">
+            O NextQS busca pelo email completo do usuário. O status é lido pelo robô e pode levar até um minuto.
+          </span>
+        </span>
+      </label>
+      <input type="text" id="email" name="email" value="{{ email }}" placeholder="Ex: fulano@unimedoestedopara.coop.br">
+    </div>
+    <button type="submit" class="btn btn-primario">Buscar</button>
+  </form>
+
+  {% if email and usuario %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>Email</th>
+          <th>Perfil</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>{{ usuario.nome or '—' }}</td>
+          <td class="mono">{{ usuario.email or '—' }}</td>
+          <td>{{ usuario.perfil or usuario.profile_id or '—' }}</td>
+          <td>
+            <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+                    onclick='abrirNextqs({{ usuario.email|tojson }}, {{ usuario.nome|tojson }}, {{ (usuario.perfil or usuario.profile_id)|tojson }})'>
+              Ver colab.
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% elif email and not erro %}
+  <div class="estado-vazio">Nenhum usuário encontrado no NextQS.</div>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-nextqs" onclick="fecharNextqsFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="nextqs-nome">—</div>
+        <div class="modal-subtitulo" id="nextqs-email">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharNextqs()">&times;</button>
+    </div>
+
+    <div style="padding:16px 20px;">
+      <div class="detalhe-linha"><span class="detalhe-rotulo">Perfil</span><span id="nextqs-perfil">—</span></div>
+
+      <div class="detalhe-linha">
+        <span class="detalhe-rotulo">Status</span>
+        <span id="nextqs-status-area">
+          <span id="nextqs-status-badge" style="color:var(--text-muted); font-size:13px;">clique para verificar</span>
+        </span>
+      </div>
+      <button type="button" class="btn-limpar-filtros" style="width:100%; margin-top:8px;" id="nextqs-btn-status" onclick="verificarStatusNextqs()">
+        Verificar status (robô)
+      </button>
+
+      <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+
+      <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">
+        Inativar executa o robô e pode levar até um minuto.
+      </p>
+      <div id="nextqs-resultado" style="margin-bottom:10px; font-size:13px;"></div>
+      <button type="button" class="btn btn-primario" id="nextqs-btn-inativar" style="width:100%; background:var(--danger);"
+              onclick="inativarNextqs()">Inativar no NextQS</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let nextqsEmailAtual = null;
+
+  function abrirNextqs(email, nome, perfil) {
+    nextqsEmailAtual = email;
+    document.getElementById('modal-nextqs').classList.add('aberto');
+    document.getElementById('nextqs-nome').textContent = nome || email;
+    document.getElementById('nextqs-email').textContent = email;
+    document.getElementById('nextqs-perfil').textContent = perfil || '—';
+    document.getElementById('nextqs-resultado').textContent = '';
+    document.getElementById('nextqs-resultado').className = '';
+    const badge = document.getElementById('nextqs-status-badge');
+    badge.textContent = 'clique para verificar';
+    badge.className = '';
+    badge.style.color = 'var(--text-muted)';
+    badge.style.fontSize = '13px';
+  }
+
+  function fecharNextqs() {
+    document.getElementById('modal-nextqs').classList.remove('aberto');
+    nextqsEmailAtual = null;
+  }
+
+  function fecharNextqsFora(evento) {
+    if (evento.target.id === 'modal-nextqs') fecharNextqs();
+  }
+
+  function mostrarStatusNextqs(status) {
+    const area = document.getElementById('nextqs-status-area');
+    const s = (status || '').toLowerCase();
+    const classe = s === 'ativo' ? 'sucesso' : (s === 'inativo' ? 'erro' : 'pendente');
+    const texto = s ? s.charAt(0).toUpperCase() + s.slice(1) : '—';
+    area.innerHTML = `<span class="badge badge-${classe}">${texto}</span>`;
+  }
+
+  async function verificarStatusNextqs() {
+    if (!nextqsEmailAtual) return;
+    const btn = document.getElementById('nextqs-btn-status');
+    const badge = document.getElementById('nextqs-status-badge');
+    btn.disabled = true;
+    badge.textContent = 'Consultando pelo robô… pode levar até um minuto.';
+
+    const dados = new FormData();
+    dados.set('email', nextqsEmailAtual);
+    try {
+      const resp = await fetch("{{ url_for('painel.api_nextqs_status') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      if (!resp.ok) {
+        badge.textContent = json.erro || 'Falha ao consultar.';
+        badge.style.color = 'var(--danger)';
+        return;
+      }
+      mostrarStatusNextqs(json.status);
+    } catch (e) {
+      badge.textContent = 'Falha ao consultar o status.';
+      badge.style.color = 'var(--danger)';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function inativarNextqs() {
+    if (!nextqsEmailAtual) return;
+    const resultado = document.getElementById('nextqs-resultado');
+    const btn = document.getElementById('nextqs-btn-inativar');
+    resultado.className = '';
+    resultado.textContent = 'Executando o robô… isso pode levar até um minuto.';
+    btn.disabled = true;
+
+    const dados = new FormData();
+    dados.set('email', nextqsEmailAtual);
+    try {
+      const resp = await fetch("{{ url_for('painel.api_nextqs_inativar') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      if (!resp.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = json.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = json.mensagem;
+      mostrarStatusNextqs(json.status);
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao inativar.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+</script>
+{% endblock %}
