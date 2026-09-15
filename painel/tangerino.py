@@ -387,6 +387,23 @@ def fetch_vacation_rows_page(from_d, to_d, status_filter, only_now, ui_page, ui_
 
     ajustes = _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_size)
 
+    # O employeeDTO da listagem de férias não traz CPF. A listagem geral de
+    # funcionários (mesma usada na tela Colaboradores) traz — cruza por id.
+    # buscar_todos_employees_brutos já é cacheada, então isso não gera uma
+    # chamada extra por período de férias.
+    cpf_por_id = {}
+    try:
+        brutos = buscar_todos_employees_brutos(session, headers, timeout, api_page_size, incluir_demitidos=True)
+        for emp in brutos:
+            id_ = emp.get("id")
+            if id_ is None:
+                continue
+            cpf = get_first_present(emp, ("cpf", "cpfNumber", "documento", "numeroCpf", "docNumber"))
+            if cpf:
+                cpf_por_id[id_] = normalizar_cpf(cpf)
+    except Exception:
+        pass  # se falhar, segue sem CPF em vez de quebrar a tela de férias
+
     matches = []
     total_em_ferias_agora = 0
 
@@ -407,9 +424,11 @@ def fetch_vacation_rows_page(from_d, to_d, status_filter, only_now, ui_page, ui_
             continue
 
         emp = it.get("employeeDTO") or {}
+        cpf = cpf_por_id.get(emp.get("id"), "")
         matches.append({
             "name": emp.get("name", f"ID {emp.get('id', '?')}"),
             "email": emp.get("email"),
+            "cpf": cpf,
             "start_str": ms_to_local_str(st),
             "end_str": ms_to_local_str(en),
             "status": it.get("status", "-"),

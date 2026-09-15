@@ -62,6 +62,7 @@
           <th>Início</th>
           <th>Fim</th>
           <th>Status</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -75,6 +76,12 @@
             {% set st = linha.status %}
             <span class="badge badge-{{ 'sucesso' if st == 'APROVADO' else ('erro' if st == 'REPROVADO' else 'parcial') }}">{{ st }}</span>
             {% if linha.in_now %}<span class="badge badge-executando">em férias agora</span>{% endif %}
+          </td>
+          <td>
+            <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+                    onclick='programarDoTangerino({{ linha.name|tojson }}, {{ (linha.email or "")|tojson }}, {{ (linha.cpf or "")|tojson }}, {{ linha.start_str|tojson }}, {{ linha.end_str|tojson }})'>
+              Programar
+            </button>
           </td>
         </tr>
         {% endfor %}
@@ -100,4 +107,227 @@
   </div>
   {% endif %}
 </div>
+
+<div class="card-panel" style="margin-top:20px; padding:22px 24px;">
+  <div class="page-header" style="margin-bottom:14px;">
+    <h1 style="font-size:18px;">Programar desativação de acessos</h1>
+    <p>Agende a pausa dos acessos durante as férias. Todo dia às 7h o sistema inativa quem entrou de férias e reativa quem voltou.</p>
+  </div>
+
+  <form id="form-agendamento" onsubmit="event.preventDefault(); criarAgendamento();">
+    <div class="agendamento-grid">
+      <div>
+        <label class="rotulo-campo" for="ag-nome">Nome do colaborador</label>
+        <input type="text" id="ag-nome" placeholder="Nome completo">
+      </div>
+      <div>
+        <label class="rotulo-campo" for="ag-email">Email <span id="ag-email-origem" style="font-weight:400; text-transform:none; letter-spacing:0;"></span></label>
+        <input type="email" id="ag-email" placeholder="fulano@unimedoestedopara.coop.br">
+        <input type="hidden" id="ag-email-pessoal">
+      </div>
+      <div>
+        <label class="rotulo-campo" for="ag-cpf">CPF <span style="font-weight:400; text-transform:none; letter-spacing:0;">(necessário p/ AD e GIU)</span></label>
+        <input type="text" id="ag-cpf" placeholder="Somente números">
+      </div>
+      <div style="display:flex; align-items:flex-end;">
+        <div style="width:100%;">
+          <button type="button" class="btn-limpar-filtros" style="width:100%;" onclick="buscarEmailCorporativo()">
+            Buscar e-mail corporativo no AD
+          </button>
+          <div id="ag-email-status" style="font-size:12px; color:var(--text-muted); margin-top:5px;"></div>
+        </div>
+      </div>
+      <div>
+        <label class="rotulo-campo" for="ag-inicio">Início das férias</label>
+        <input type="date" id="ag-inicio">
+      </div>
+      <div>
+        <label class="rotulo-campo" for="ag-fim">Fim das férias</label>
+        <input type="date" id="ag-fim">
+      </div>
+    </div>
+
+    <label class="rotulo-campo">Sistemas a pausar</label>
+    <div class="agendamento-sistemas">
+      {% for id_sistema, nome_sistema in sistemas_ferias %}
+      <label>
+        <input type="checkbox" class="ag-sistema" value="{{ id_sistema }}"
+               {{ 'checked' if id_sistema in ['ad','google','nextqs','giu'] }}>
+        {{ nome_sistema }}
+      </label>
+      {% endfor %}
+    </div>
+
+    <div id="ag-resultado" style="margin-bottom:10px; font-size:13px;"></div>
+    <button type="submit" class="btn btn-primario">Agendar desativação</button>
+  </form>
+
+  <hr style="border:none; border-top:1px solid var(--border); margin:20px 0;">
+
+  <div class="detalhe-rotulo" style="margin-bottom:10px;">Agendamentos</div>
+  <div id="lista-agendamentos">
+    <p style="font-size:13px; color:var(--text-muted); margin:0;">Carregando…</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const ESTADO_LABEL = {
+    agendado: ['Agendado', 'pendente'],
+    inativado: ['Acessos pausados', 'executando'],
+    reativado: ['Concluído', 'sucesso'],
+    cancelado: ['Cancelado', 'parcial'],
+    erro_inativacao: ['Erro ao pausar', 'erro'],
+    erro_reativacao: ['Erro ao reativar', 'erro'],
+  };
+
+  function programarDoTangerino(nome, email, cpf, inicio, fim) {
+    document.getElementById('ag-nome').value = nome || '';
+    document.getElementById('ag-email').value = email || '';
+    document.getElementById('ag-email-pessoal').value = email || '';
+    document.getElementById('ag-cpf').value = cpf || '';
+    document.getElementById('ag-inicio').value = converterData(inicio);
+    document.getElementById('ag-fim').value = converterData(fim);
+    document.getElementById('ag-email-origem').textContent = '';
+    document.getElementById('ag-email-status').textContent = '';
+    document.getElementById('form-agendamento').scrollIntoView({ behavior: 'smooth' });
+    if (!cpf) {
+      document.getElementById('ag-cpf').focus();
+    } else {
+      buscarEmailCorporativo();
+    }
+  }
+
+  async function buscarEmailCorporativo() {
+    const cpf = document.getElementById('ag-cpf').value.trim();
+    const status = document.getElementById('ag-email-status');
+    const origem = document.getElementById('ag-email-origem');
+    const campoEmail = document.getElementById('ag-email');
+    const emailPessoal = document.getElementById('ag-email-pessoal').value.trim() || campoEmail.value.trim();
+
+    if (!cpf) {
+      status.textContent = 'Preencha o CPF antes de buscar no AD.';
+      status.style.color = 'var(--danger)';
+      return;
+    }
+    if (!document.getElementById('ag-email-pessoal').value) {
+      document.getElementById('ag-email-pessoal').value = campoEmail.value.trim();
+    }
+
+    status.textContent = 'Consultando o Active Directory…';
+    status.style.color = 'var(--text-muted)';
+
+    const dados = new FormData();
+    dados.set('cpf', cpf);
+    try {
+      const resp = await fetch("{{ url_for('painel.api_ferias_resolver_email') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      if (!resp.ok) {
+        status.textContent = json.erro || 'Falha ao consultar o AD.';
+        status.style.color = 'var(--danger)';
+        return;
+      }
+      if (json.encontrado && json.email) {
+        campoEmail.value = json.email;
+        origem.textContent = '— corporativo (AD)';
+        origem.style.color = 'var(--accent)';
+        status.textContent = json.disabled
+          ? 'Encontrado no AD (conta já desativada).'
+          : 'E-mail corporativo encontrado e preenchido.';
+        status.style.color = 'var(--accent)';
+      } else {
+        campoEmail.value = emailPessoal;
+        origem.textContent = '— pessoal (sem AD)';
+        origem.style.color = 'var(--text-muted)';
+        status.textContent = 'Não encontrado no AD. Mantido o e-mail pessoal do Tangerino.';
+        status.style.color = 'var(--text-muted)';
+      }
+    } catch (e) {
+      status.textContent = 'Falha ao consultar o AD.';
+      status.style.color = 'var(--danger)';
+    }
+  }
+
+  // Tangerino manda dd/mm/aaaa; o input date quer aaaa-mm-dd
+  function converterData(s) {
+    if (!s) return '';
+    const m = String(s).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return s.match(/^\d{4}-\d{2}-\d{2}$/) ? s : '';
+  }
+
+  async function criarAgendamento() {
+    const resultado = document.getElementById('ag-resultado');
+    resultado.className = '';
+
+    const dados = new FormData();
+    dados.set('nome', document.getElementById('ag-nome').value.trim());
+    dados.set('email', document.getElementById('ag-email').value.trim());
+    dados.set('cpf', document.getElementById('ag-cpf').value.trim());
+    dados.set('data_inicio', document.getElementById('ag-inicio').value);
+    dados.set('data_fim', document.getElementById('ag-fim').value);
+    document.querySelectorAll('.ag-sistema:checked').forEach(c => dados.append('sistemas', c.value));
+
+    resultado.textContent = 'Salvando…';
+    try {
+      const resp = await fetch("{{ url_for('painel.api_ferias_criar') }}", { method: 'POST', body: dados });
+      const json = await resp.json();
+      if (!resp.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = json.erro;
+        return;
+      }
+      resultado.className = 'aviso aviso-sucesso';
+      resultado.textContent = json.mensagem;
+      document.getElementById('form-agendamento').reset();
+      carregarAgendamentos();
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao criar o agendamento.';
+    }
+  }
+
+  async function cancelarAgendamento(id) {
+    if (!confirm('Cancelar este agendamento?')) return;
+    try {
+      const resp = await fetch(`/painel/api/ferias/agendamentos/${id}/cancelar`, { method: 'POST' });
+      const json = await resp.json();
+      if (!resp.ok) { alert(json.erro); return; }
+      carregarAgendamentos();
+    } catch (e) { alert('Falha ao cancelar.'); }
+  }
+
+  async function carregarAgendamentos() {
+    const alvo = document.getElementById('lista-agendamentos');
+    try {
+      const resp = await fetch("{{ url_for('painel.api_ferias_listar') }}");
+      const json = await resp.json();
+      const itens = json.agendamentos || [];
+      if (!itens.length) {
+        alvo.innerHTML = '<p style="font-size:13px; color:var(--text-muted); margin:0;">Nenhum agendamento ainda.</p>';
+        return;
+      }
+      let html = '<table class="tabela"><thead><tr><th>Colaborador</th><th>Início</th><th>Fim</th><th>Sistemas</th><th>Situação</th><th></th></tr></thead><tbody>';
+      for (const a of itens) {
+        const [label, cls] = ESTADO_LABEL[a.estado] || [a.estado, 'parcial'];
+        const podeCancelar = a.estado === 'agendado';
+        html += `<tr>
+          <td>${a.nome || '—'}</td>
+          <td class="mono">${a.data_inicio}</td>
+          <td class="mono">${a.data_fim}</td>
+          <td style="font-size:12px;">${(a.sistemas || []).join(', ')}</td>
+          <td><span class="badge badge-${cls}">${label}</span></td>
+          <td>${podeCancelar ? `<button type="button" class="btn-limpar-filtros" style="padding:4px 10px;" onclick="cancelarAgendamento('${a.id}')">Cancelar</button>` : ''}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      alvo.innerHTML = html;
+    } catch (e) {
+      alvo.innerHTML = '<div class="aviso aviso-erro">Falha ao carregar agendamentos.</div>';
+    }
+  }
+
+  carregarAgendamentos();
+</script>
 {% endblock %}
