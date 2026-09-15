@@ -44,6 +44,7 @@ from painel.giu_api import GiuConfigError, GiuError
 from painel.giu_api import buscar_usuarios as giu_buscar_usuarios
 from painel.giu_api import obter_usuario as giu_obter_usuario
 from painel.giu_api import definir_ativo as giu_definir_ativo
+from painel.nextqs_api import NextQSClient, NextQSConfigError, NextQSError
 from painel.piramide import PiramideConfigError, buscar_usuarios as piramide_buscar_usuarios
 from painel.piramide import definir_ativo as piramide_definir_ativo
 from painel.piramide import obter_usuario as piramide_obter_usuario
@@ -89,15 +90,17 @@ SISTEMAS_DISPONIVEIS = [
     ("crm", "CRM JMJ"),
     ("saw", "SAW"),
     ("giu", "GIU Unimed"),
+    ("nextqs", "NextQS Manager"),
     ("ged", "GED Bye Bye Paper"),
     ("tasy", "Tasy EMR"),
     ("infomed", "Infomed"),
     ("piramide", "Pirâmide"),
+    ("google", "Google Workspace"),
 ]
 
 # todos os sistemas acima já suportam ativar E desativar - mantido como um set
 # separado pra facilitar esmaecer na tela algum sistema que no futuro só suporte uma direção
-SISTEMAS_SUPORTAM_ATIVAR = {"ad", "crm", "saw", "giu", "ged", "tasy", "infomed", "piramide"}
+SISTEMAS_SUPORTAM_ATIVAR = {"ad", "crm", "saw", "giu", "nextqs", "ged", "tasy", "infomed", "piramide", "google"}
 
 
 def login_obrigatorio(view):
@@ -378,6 +381,7 @@ def ferias():
         rows=rows, from_=from_s, to_=to_s, status=status_filter, only_now=only_now,
         size=size, current_page=current_page, has_next_page=has_next,
         total_now=total_now, erro=erro,
+        sistemas_ferias=SISTEMAS_DISPONIVEIS,
     )
 
 
@@ -1243,3 +1247,138 @@ def api_giu_definir_ativo(login):
     if not ok:
         return jsonify({"erro": mensagem}), 400
     return jsonify({"mensagem": mensagem, "ativo": ativo})
+
+
+@painel_bp.route("/nextqs", endpoint="nextqs")
+@login_obrigatorio
+def tela_nextqs():
+    email = request.args.get("email", "").strip()
+    erro = None
+    usuario = None
+
+    if email:
+        try:
+            usuario = NextQSClient().buscar_usuario_por_email(email)
+            if usuario is None:
+                erro = "Usuário não encontrado no NextQS."
+        except NextQSConfigError as e:
+            erro = str(e)
+        except NextQSError as e:
+            erro = str(e)
+        except Exception as e:
+            erro = f"Falha ao consultar o NextQS: {e}"
+
+    return render_template("nextqs.html", email=email, usuario=usuario, erro=erro)
+
+
+@painel_bp.route("/api/nextqs/status", methods=["POST"])
+@login_obrigatorio
+def api_nextqs_status():
+    email = (request.form.get("email") or "").strip()
+    if not email:
+        return jsonify({"erro": "email é obrigatório."}), 400
+    try:
+        from rpa_nextqs import consultar_status_nextqs
+        status, _ = consultar_status_nextqs(email)
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o status: {e}"}), 502
+
+    if status == 3:
+        return jsonify({"erro": "Usuário não encontrado no NextQS."}), 404
+    if status == "erro":
+        return jsonify({"erro": "Não foi possível ler o status pelo robô."}), 502
+    return jsonify({"status": status})
+
+
+@painel_bp.route("/api/nextqs/inativar", methods=["POST"])
+@login_obrigatorio
+def api_nextqs_inativar():
+    email = (request.form.get("email") or "").strip()
+    if not email:
+        return jsonify({"erro": "email é obrigatório."}), 400
+    try:
+        from rpa_nextqs import executar_nextqs_automatico, SUCESSO, JA_INATIVO, NAO_ENCONTRADO
+        codigo = executar_nextqs_automatico(email)
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao executar o robô: {e}"}), 502
+
+    if codigo == SUCESSO:
+        return jsonify({"mensagem": "Usuário inativado no NextQS.", "status": "inativo"})
+    if codigo == JA_INATIVO:
+        return jsonify({"mensagem": "Usuário já estava inativo.", "status": "inativo"})
+    if codigo == NAO_ENCONTRADO:
+        return jsonify({"erro": "Usuário não encontrado no NextQS."}), 404
+    return jsonify({"erro": "Falha ao inativar pelo robô. Verifique os logs."}), 502
+
+
+# ---------------------------------------------------------------------------
+# Agendamento de desativação de acessos por férias
+# ---------------------------------------------------------------------------
+
+@painel_bp.route("/api/ferias/agendamentos")
+@login_obrigatorio
+def api_ferias_listar():
+    from painel import agendamento_ferias as ag
+    itens = ag.listar_agendamentos()
+    # mais recentes primeiro
+    itens = sorted(itens, key=lambda a: a.get("criado_em", ""), reverse=True)
+    return jsonify({"agendamentos": itens})
+
+
+@painel_bp.route("/api/ferias/agendamentos", methods=["POST"])
+@login_obrigatorio
+def api_ferias_criar():
+    from painel import agendamento_ferias as ag
+    nome = (request.form.get("nome") or "").strip()
+    cpf = (request.form.get("cpf") or "").strip()
+    email = (request.form.get("email") or "").strip()
+    data_inicio = (request.form.get("data_inicio") or "").strip()
+    data_fim = (request.form.get("data_fim") or "").strip()
+    sistemas = request.form.getlist("sistemas") or None
+    try:
+        registro = ag.criar_agendamento(nome, cpf, email, data_inicio, data_fim, sistemas)
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao criar agendamento: {e}"}), 500
+    return jsonify({"mensagem": "Agendamento criado.", "agendamento": registro})
+
+
+@painel_bp.route("/api/ferias/agendamentos/<id_agendamento>/cancelar", methods=["POST"])
+@login_obrigatorio
+def api_ferias_cancelar(id_agendamento):
+    from painel import agendamento_ferias as ag
+    ok, msg = ag.cancelar_agendamento(id_agendamento)
+    if not ok:
+        return jsonify({"erro": msg}), 400
+    return jsonify({"mensagem": msg})
+
+
+@painel_bp.route("/api/ferias/resolver-email", methods=["POST"])
+@login_obrigatorio
+def api_ferias_resolver_email():
+    """Busca o e-mail corporativo no AD a partir do CPF (employeeID).
+
+    Usado ao programar uma desativação de acessos: sistemas que exigem e-mail
+    corporativo (Google Workspace, NextQS...) devem receber o e-mail do AD
+    quando existir, em vez do e-mail pessoal cadastrado no Tangerino.
+    """
+    cpf = (request.form.get("cpf") or "").strip()
+    cpf = "".join(c for c in cpf if c.isdigit())
+    if not cpf:
+        return jsonify({"erro": "CPF é obrigatório para buscar no AD."}), 400
+
+    try:
+        dados = ad_buscar_por_employee_id(cpf)
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o AD: {e}"}), 502
+
+    if not dados:
+        return jsonify({"encontrado": False})
+
+    return jsonify({
+        "encontrado": True,
+        "email": dados.get("mail") or None,
+        "sam": dados.get("sam"),
+        "disabled": dados.get("disabled"),
+    })

@@ -102,6 +102,16 @@ SISTEMAS = {
         'nome': 'Pirâmide',
         'requer': ['email'],
         'script': 'rpa_piramide.py'
+    },
+    'nextqs': {
+        'nome': 'NextQS Manager',
+        'requer': ['email'],
+        'script': 'rpa_nextqs.py'
+    },
+    'google': {
+        'nome': 'Google Workspace',
+        'requer': ['email'],
+        'script': None  # usa a API do Google, não RPA
     }
 }
 
@@ -156,6 +166,42 @@ def definir_ativo_ad(cpf, ativar):
             conn.unbind()
             return {'status': 'erro', 'msg': f'Erro ao {verbo[:-1]}r: {conn.result}'}
             
+    except Exception as e:
+        return {'status': 'erro', 'msg': str(e)}
+
+def definir_ativo_google(email, ativar):
+    """Suspende (inativa) ou reativa um usuário no Google Workspace via API."""
+    try:
+        if ativar:
+            # reativar: patch direto com suspended=False
+            from google_admin import obter_service_admin, GoogleAdminConfigError
+            try:
+                from googleapiclient.errors import HttpError
+            except Exception as exc:
+                return {'status': 'erro', 'msg': f'Dependências Google ausentes: {exc}'}
+            try:
+                service = obter_service_admin()
+                service.users().patch(userKey=email.strip().lower(), body={'suspended': False}).execute()
+                return {'status': 'sucesso', 'msg': f'Usuário {email} reativado no Google Workspace'}
+            except HttpError as exc:
+                status_code = getattr(getattr(exc, 'resp', None), 'status', None)
+                if status_code == 404:
+                    return {'status': 'nao_encontrado', 'msg': 'Usuário não encontrado no Google'}
+                return {'status': 'erro', 'msg': str(exc)}
+            except GoogleAdminConfigError as exc:
+                return {'status': 'erro', 'msg': str(exc)}
+        else:
+            # inativar: usa a função existente
+            from google_admin import inativar_email_google_workspace
+            r = inativar_email_google_workspace(email)
+            status = r.get('status')
+            if status == 'sucesso':
+                return {'status': 'sucesso', 'msg': f'Usuário {email} suspenso no Google Workspace'}
+            if status == 'skipped':
+                return {'status': 'pulado', 'msg': r.get('motivo', 'Ignorado')}
+            if status == 'nao_encontrado':
+                return {'status': 'nao_encontrado', 'msg': r.get('erro', 'Não encontrado no Google')}
+            return {'status': 'erro', 'msg': r.get('erro', 'Erro no Google Workspace')}
     except Exception as e:
         return {'status': 'erro', 'msg': str(e)}
 
@@ -237,6 +283,8 @@ def processar_sistema(sistema_id, cpf=None, email=None, nome=None, acao='desativ
     
     if sistema_id == 'ad':
         resultado = definir_ativo_ad(cpf, ativar=(acao == 'ativar'))
+    elif sistema_id == 'google':
+        resultado = definir_ativo_google(email, ativar=(acao == 'ativar'))
     elif sistema_id == 'giu':
         resultado = executar_rpa(config['script'], [cpf, acao])
     elif sistema_id == 'tasy':

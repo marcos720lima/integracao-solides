@@ -1479,3 +1479,58 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
   padding: 6px 12px;
   font-size: 12px;
 }
+
+/* ---------- seção "Programar desativação de acessos" (férias) ---------- */
+#form-agendamento input[type="text"],
+#form-agendamento input[type="email"],
+#form-agendamento input[type="date"] {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  font-size: 13px;
+  font-family: var(--font-ui);
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+
+#form-agendamento input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+[data-theme="escuro"] #form-agendamento input[type="date"] { color-scheme: dark; }
+
+.agendamento-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 20px;
+  margin-bottom: 16px;
+  max-width: 640px;
+}
+
+.agendamento-sistemas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 8px 0 16px;
+}
+
+.agendamento-sistemas label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.agendamento-sistemas input {
+  width: auto;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .agendamento-grid { grid-template-columns: 1fr; }
+}

@@ -171,7 +171,7 @@ SISTEMAS_CONFIG = {
         'requer_ad': True  # Precisa do email do AD
     },
     'nextqs': {
-        'ativo': False,
+        'ativo': True,
         'script': 'rpa_nextqs.py',
         'timeout': 300,
         'nome': 'NextQS Manager',
@@ -484,6 +484,35 @@ def consultar_email_por_cpf(cpf):
         conn.unbind()
 
 
+def enviar_email_simples(assunto, corpo_html, destinatarios=None):
+    """Envia um e-mail HTML simples para a equipe de TI (ou destinatários dados).
+
+    Reutiliza EMAIL_CONFIG e TI_EMAILS. Usado por rotinas como a de férias.
+    """
+    destino = destinatarios or [e for e in TI_EMAILS if e.strip()]
+    if not destino:
+        logger.warning("[EMAIL] Sem destinatários configurados (TI_EMAILS).")
+        return False
+
+    smtp = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
+    try:
+        smtp.starttls()
+        smtp.login(EMAIL_CONFIG['username'], EMAIL_CONFIG['password'])
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = assunto
+        msg['From'] = EMAIL_CONFIG['username']
+        msg['To'] = ', '.join(destino)
+        msg.attach(MIMEText(corpo_html, 'html', 'utf-8'))
+        smtp.send_message(msg)
+        logger.info("[OK] [EMAIL] E-mail simples enviado: %s", assunto)
+        return True
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+
+
 def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas=None):
     """Envia email de notificação sobre a desativação do colaborador."""
     logger.info("[EMAIL] Iniciando envio de notificação...")
@@ -614,7 +643,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
             .cabecalho {{ background-color: #004e4c; padding: 24px 20px; text-align: center; }}
             .cabecalho img {{ max-width: 220px; height: auto; }}
             .corpo {{ background-color: #ffffff; padding: 20px 24px 8px; }}
-            h2 {{ color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px; margin-top: 0; }}
+            h2 {{ color: #004e4c; border-bottom: 2px solid #004e4c; padding-bottom: 10px; margin-top: 0; }}
             h3 {{ color: #00995d; margin-top: 25px; }}
             .info-box {{ background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #00995d; }}
             .status-box {{ background-color: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #ffc107; }}
@@ -654,6 +683,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
                     <tr><td>CRM JMJ:</td><td>{status['jmj']}</td></tr>
                     <tr><td>SAW:</td><td>{status['saw']}</td></tr>
                     <tr><td>GIU Unimed:</td><td>{status['giu']}</td></tr>
+                    <tr><td>NextQS Manager:</td><td>{status['nextqs']}</td></tr>
                     <tr><td>GED (Bye Bye Paper):</td><td>{status['ged']}</td></tr>
                     <tr><td>Tasy EMR:</td><td>{status['tasy']}</td></tr>
                     <tr><td>Infomed:</td><td>{status['infomed']}</td></tr>
