@@ -45,3 +45,4 @@ echo giu_debug_*.png >> .gitignore
 echo giu_debug_*.html >> .gitignoredata/ferias_log.txt 
 nextqs_debug_login.png 
 data/ferias_log.txt 
+data/webhooks_recebidos.json 
