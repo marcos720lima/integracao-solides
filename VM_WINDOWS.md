@@ -80,71 +80,114 @@ Confirme que o arquivo **`.env`** está na pasta do projeto na VM com as mesmas 
 
 ---
 
-## 3. Servidor iniciando sozinho na VM (Task Scheduler)
+## 3. Servidor + ngrok subindo sozinhos na VM (Task Scheduler)
 
-Para o servidor **subir automaticamente** quando alguém logar na VM (ou quando a VM ligar, se configurar logon automático):
+O servidor (`server.py`, via Waitress) e o `ngrok` sobem juntos, disparados pelo **mesmo** `iniciar_servidor_vm.bat`, através de uma Tarefa Agendada já configurada nesta VM chamada **`Integração Solides - server`**.
 
-### 3.1 Usar o script em batch (Waitress – produção)
+### 3.1 Como a tarefa está configurada
 
-Foi criado o arquivo **`iniciar_servidor_vm.bat`**. Ele sobe o servidor com **Waitress** (servidor WSGI adequado para produção), na porta 3000.
+| Aba | Configuração |
+|-----|---------------|
+| **Geral** | Executa como `Administrador`, com **"Executar estando o usuário conectado ou não"**, `LogonType: Password` (o Windows guarda a credencial de forma criptografada — não é a mesma coisa que login automático do Windows, que grava a senha em texto claro no Registro) |
+| **Disparadores** | **Dois gatilhos**: ao fazer **logon** do usuário `Administrador`, **e** `AtStartup` (na inicialização da VM). Os dois coexistem — cobre tanto o caso de alguém logar quanto o de a VM reiniciar sozinha (update do Windows, queda de energia, manutenção do Proxmox) sem ninguém entrar na tela |
+| **Ações** | Programa: `C:\IntegracaoSolides\iniciar_servidor_vm.bat` |
 
-Se a pasta do projeto na VM for outra (ex.: `C:\IntegracaoSolides`), edite o `.bat` ou crie um atalho que execute:
+O `.bat` abre duas janelas destacadas (`start "" cmd /c ...`): uma com `python -m waitress --host=0.0.0.0 --port=3000 server:app`, outra com `ngrok http 3000`. Por rodarem via Tarefa Agendada (Sessão 0 do Windows), essas janelas **não aparecem** na área de trabalho mesmo com o processo ativo — não estranhe não ver nada na tela depois de ligar a VM; é esperado.
 
-```cmd
-cd /d C:\IntegracaoSolides
-python -m waitress --host=0.0.0.0 --port=3000 server:app
+> **Nunca rode `iniciar_servidor_vm.bat` manualmente enquanto essa tarefa existir.** Isso abriria um segundo processo de `ngrok`, e contas gratuitas só permitem uma sessão de túnel simultânea — a segunda tentativa falha com `ERR_NGROK_108`, e a URL pública que aparecer pode não ser a que está de fato recebendo o tráfego configurado no Solides.
+
+### 3.2 Verificar e reiniciar (PowerShell)
+
+```powershell
+# Ver os dois gatilhos configurados
+(Get-ScheduledTask -TaskName "Integração Solides - server").Triggers | Select-Object -ExpandProperty CimClass | Select-Object CimClassName
+# Deve retornar: MSFT_TaskLogonTrigger e MSFT_TaskBootTrigger
+
+# Ver a credencial/tipo de execução
+(Get-ScheduledTask -TaskName "Integração Solides - server").Principal
+
+# Ver a última execução (LastTaskResult 267014 é normal — significa "a tarefa
+# encerrou", não erro; o .bat abre as janelas destacadas e termina em seguida,
+# enquanto server.py e ngrok continuam rodando por trás)
+Get-ScheduledTaskInfo -TaskName "Integração Solides - server"
+
+# Reiniciar o servidor + ngrok sem duplicar processo
+Restart-ScheduledTask -TaskName "Integração Solides - server"
+# ou
+schtasks /run /tn "Integração Solides - server"
 ```
 
-Se usar venv:
+Se a tarefa ainda não tiver o gatilho de `AtStartup` (por exemplo, numa VM nova clonada desta), adicione assim — mantém o gatilho de logon que já existe:
 
-```cmd
-cd /d C:\IntegracaoSolides
-call venv\Scripts\activate
-python -m waitress --host=0.0.0.0 --port=3000 server:app
+```powershell
+$tarefa = Get-ScheduledTask -TaskName "Integração Solides - server"
+$novoTrigger = New-ScheduledTaskTrigger -AtStartup
+$todosTriggers = $tarefa.Triggers + $novoTrigger
+
+# Tarefas com LogonType Password exigem reafirmar a credencial ao editar,
+# senão dá erro "Nome de usuário ou senha incorretos" (0x8007052e)
+$cred = Get-Credential -UserName "Administrador" -Message "Senha da tarefa"
+Set-ScheduledTask -TaskName "Integração Solides - server" -Trigger $todosTriggers `
+  -User $cred.UserName -Password $cred.GetNetworkCredential().Password
 ```
 
-### 3.2 Agendar no Task Scheduler (início ao logon)
+### 3.3 Criar a tarefa do zero (VM nova, sem a tarefa ainda)
 
-1. Abra **Agendador de Tarefas** (Task Scheduler).
-2. **Criar Tarefa** (não “Tarefa Básica”).
-3. Aba **Geral**:
-   - Nome: ex. `Integracao Solides - Servidor`
-   - Marque **Executar estando o usuário conectado ou não** e **Executar com privilégios mais altos** se precisar.
-   - Configure para executar com o usuário que faz logon na VM.
-4. Aba **Disparadores**:
-   - **Novo** → **Iniciar a tarefa**: **Ao fazer logon** (ou **Na inicialização** se a VM tiver logon automático).
-   - Usuário: o usuário que usa a VM.
-5. Aba **Ações**:
-   - **Novo** → **Iniciar um programa**.
-   - Programa: `C:\IntegracaoSolides\iniciar_servidor_vm.bat` (ajuste o caminho).
-   - Ou use:
-     - Programa: `C:\Windows\System32\cmd.exe`
-     - Argumentos: `/c "cd /d C:\IntegracaoSolides && venv\Scripts\activate && python -m waitress --host=0.0.0.0 --port=3000 server:app"`
-   - Iniciar em: `C:\IntegracaoSolides`.
-6. Aba **Condições**: desmarque **Iniciar a tarefa somente se o computador estiver conectado à energia CA** se for VM sempre ligada.
-7. Salve e teste: faça logoff/logon ou reinicie a VM e verifique se o servidor está respondendo em `http://localhost:3000/status`.
+Se for configurar em uma VM que ainda não tem a tarefa:
 
-Assim, sempre que a VM estiver ligada e o usuário logado (ou na inicialização, conforme configurado), o servidor sobe sozinho.
+1. Abra **Agendador de Tarefas** → **Criar Tarefa** (não "Tarefa Básica").
+2. Aba **Geral**: nome `Integração Solides - server`, usuário `Administrador` (ou o que a VM usa), marque **Executar estando o usuário conectado ou não** e **Executar com os privilégios mais altos**.
+3. Aba **Disparadores**: adicione **dois** — **Ao fazer logon** (usuário: Administrador) **e** **Na inicialização**.
+4. Aba **Ações**: **Iniciar um programa** → `C:\IntegracaoSolides\iniciar_servidor_vm.bat`.
+5. Aba **Condições**: desmarque "Iniciar a tarefa somente se o computador estiver conectado à energia CA".
+6. Salve — vai pedir a senha do usuário nesse momento (é o que grava a credencial).
+7. Teste: `schtasks /run /tn "Integração Solides - server"` e confira `http://localhost:3000/status`.
 
 ---
 
-## 4. Ngrok (se os webhooks vêm da internet)
+## 4. Programação de férias (tarefa diária às 7h)
 
-Se o Solides envia webhook para uma URL pública (ngrok):
+A tela **Férias** do painel permite agendar a pausa de acessos durante o período de férias de um colaborador (e a reativação automática no retorno). Isso depende de uma segunda Tarefa Agendada, independente da do servidor: **`Rotina Férias - Acessos`**.
 
-- O ngrok precisa estar rodando **na mesma VM** e apontando para `http://localhost:3000`.
-- Você pode:
-  - Colocar o **ngrok** em outra tarefa agendada (outro disparador “Ao fazer logon”), ou
-  - Incluir no mesmo `.bat` a abertura do ngrok (em uma janela separada ou em background), ou
-  - Usar o **ngrok como serviço** no Windows (ex.: com NSSM) para subir junto com a VM.
+### 4.1 O que ela faz
 
-Exemplo de comando ngrok (ajuste o binário e a região se precisar):
+Roda `tarefa_ferias.py`, que:
 
-```cmd
-ngrok http 3000
+- Inativa, nos sistemas escolhidos, quem começa férias no dia;
+- Reativa, nos mesmos sistemas em que foi pausado, quem termina férias no dia (ou já passou da data e ainda não foi reativado);
+- Em caso de falha em algum sistema, marca para tentar de novo no dia seguinte e inclui no e-mail de resumo enviado ao TI.
+
+Os agendamentos ficam em `data\agendamentos_ferias.json` — não depende de banco de dados.
+
+### 4.2 Como a tarefa está configurada
+
+| Aba | Configuração |
+|-----|---------------|
+| **Geral** | Mesmo padrão da tarefa do servidor: `Administrador`, "Executar estando o usuário conectado ou não" |
+| **Disparadores** | Diário, às **07:00** |
+| **Ações** | `C:\IntegracaoSolides\venv\Scripts\python.exe` (ou o `python.exe` do ambiente usado) com argumento `tarefa_ferias.py`, "Iniciar em" `C:\IntegracaoSolides` |
+
+### 4.3 Criar a tarefa do zero (PowerShell)
+
+```powershell
+schtasks /create /tn "Rotina Ferias - Acessos" ^
+  /tr "cmd /c cd /d C:\IntegracaoSolides && python tarefa_ferias.py >> data\ferias_log.txt 2>&1" ^
+  /sc daily /st 07:00 /ru Administrador /rp *
 ```
 
-A URL pública que o ngrok mostrar é a que você configura no Solides como URL do webhook.
+(`/rp *` faz o `schtasks` perguntar a senha na hora de criar — não fica em texto claro no comando. Se usar venv, troque `python` pelo caminho completo, ex.: `venv\Scripts\python.exe`.)
+
+### 4.4 Verificar e testar
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "Rotina Ferias - Acessos"
+(Get-ScheduledTask -TaskName "Rotina Ferias - Acessos").Triggers
+
+# Rodar agora, sem esperar as 7h (útil pra testar um agendamento novo)
+schtasks /run /tn "Rotina Ferias - Acessos"
+```
+
+O log de cada execução fica em `data\ferias_log.txt` (se a tarefa foi criada com o redirecionamento `>>` do exemplo acima).
 
 ---
 
@@ -153,8 +196,9 @@ A URL pública que o ngrok mostrar é a que você configura no Solides como URL 
 | O quê | Onde |
 |-------|------|
 | VM não ficar desligada após reboot do Proxmox | Proxmox → VM → Options → Start at boot = Yes |
-| Servidor subir sozinho na VM | Task Scheduler → tarefa “Ao fazer logon” executando `iniciar_servidor_vm.bat` (ou comando waitress) |
-| Servidor estável (produção) | Usar `waitress` (script `.bat` ou comando acima), não o `flask run` de desenvolvimento |
-| Webhook pela internet | Ngrok (ou túnel similar) rodando na VM, em tarefa separada ou como serviço |
+| Servidor + ngrok subindo sozinhos | Task Scheduler → `Integração Solides - server` (gatilhos: logon **e** inicialização) executando `iniciar_servidor_vm.bat` |
+| Servidor estável (produção) | Usar `waitress` (já é o que o `.bat` faz), não o `flask run` de desenvolvimento |
+| Webhook pela internet | `ngrok http 3000`, aberto pelo mesmo `.bat`/tarefa do servidor — não precisa de tarefa separada |
+| Pausa/retorno automático de acessos em férias | Task Scheduler → `Rotina Ferias - Acessos` (diária, 07:00) executando `tarefa_ferias.py` |
 
-Assim você deixa a VM Windows 10 no Proxmox ligada e o servidor de integração Solides rodando de forma contínua e automática.
+Assim você deixa a VM Windows 10 no Proxmox ligada e o servidor de integração Solides — junto com o ngrok e a rotina de férias — rodando de forma contínua e automática, mesmo depois de um reinício sem ninguém logar.

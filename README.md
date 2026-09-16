@@ -1,6 +1,6 @@
 # Integração Solides - Active Directory + Sistemas + Painel Web
 
-Sistema automatizado que recebe webhooks do Solides quando um colaborador é demitido, além de um **painel web** para gestão manual do dia a dia de TI (colaboradores, Active Directory, Google Workspace, Infomed, e ativação/inativação manual).
+Sistema automatizado que recebe webhooks do Solides quando um colaborador é demitido, além de um **painel web** para gestão do dia a dia de TI (colaboradores, Active Directory, GIU, NextQS, Google Workspace, Infomed, Pirâmide, programação de férias e ativação/inativação manual).
 
 ## Fluxo automático (webhook de demissão)
 
@@ -13,13 +13,16 @@ Quando o Solides envia o webhook de demissão, o sistema:
 - ✅ Bloqueia no **GED Bye Bye Paper**
 - ✅ Desativa no **Tasy EMR**
 - ✅ Desativa no **Infomed**
+- ✅ Desativa no **NextQS Manager**
 - ✅ Suspende no **Google Workspace** (opcional)
 - ✅ Envia **email de notificação** para o TI
 - ✅ **Inativação parcial** quando usuário não encontrado no AD
 - ✅ **Logs automáticos** com rotação
 - ✅ **Proteção contra duplicata persistente** — não reprocessa o mesmo desligamento nem que o webhook chegue de novo horas/dias depois
 
-> **NextQS Manager está desativado no processo** — a tela de login usa verificação Cloudflare Turnstile, que bloqueia automação de navegador. Alternativas em avaliação: API oficial do fornecedor ou liberação de IP.
+> **GIU e NextQS usam arquitetura híbrida (API oficial + RPA):** a consulta de dados/status é feita pela API oficial de cada sistema (instantânea). Nenhuma das duas expõe endpoint de ativação/inativação hoje — por isso essa ação segue via RPA (Playwright). As telas de login de ambos usam Cloudflare Turnstile, que bloqueia automação de navegador comum; o RPA contorna isso conectando num navegador remoto (ZenRows Scraping Browser), autorizado pela Unimed do Brasil no caso do GIU. Ver `painel/giu_api.py` / `rpa_giu.py` e `painel/nextqs_api.py` / `rpa_nextqs.py`.
+>
+> **Pirâmide fica de fora do fluxo automático de propósito** — inativar pode travar processos abertos que dependem do usuário ativo até serem finalizados. É usada só pela tela de Ativação/Inativação manual. Ver a seção [Sistemas Integrados](#sistemas-integrados).
 >
 > **B+ Reembolso (`rpa_bplus.py`) existe no repositório mas não está ligado a nenhum fluxo** (nem automático, nem manual) — o script foi escrito mas nunca chegou a ser registrado no `SISTEMAS_CONFIG` do `server.py`. Se for pra usar, precisa ser adicionado lá.
 
@@ -32,11 +35,14 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **Dashboard** | Total de desligados, gráfico por setor, exportar Excel, histórico com busca/filtro |
 | **Colaboradores** | Lista do Tangerino (busca por nome ou CPF), card por pessoa com Informações, Horário (logon hours + predefinição de horário administrativo), Senha, Bloqueio e **Sistemas** (status ao vivo em AD, Google, CRM, SAW, GIU, GED, Tasy e Infomed, incluindo o login/código de cada um) |
 | **Criar acesso** | Cadastro de novo colaborador: busca no Tangerino por CPF, cria no AD e no Google Workspace |
-| **Active Directory** | Busca/filtra usuários do AD (nome, status, setor), com paginação e edição de horário de logon — cobre contas sem CPF vinculado (antigas ou genéricas) que não aparecem em Colaboradores |
+| **Active Directory** | Busca/filtra usuários do AD (nome, status, setor, OU), com paginação. Ao abrir um colaborador: aba **Geral** (edição de nome, email, setor, PIN de impressora e CPF), aba **Horários liberados** (logon hours, com botão de predefinir horário administrativo) e aba **Senha** (redefinir senha, bloquear/desbloquear conta). Cobre também contas sem CPF vinculado (antigas ou genéricas) que não aparecem em Colaboradores |
+| **GIU Unimed** | Consulta por CPF/CNPJ via API oficial — status, último acesso e aplicações/papéis vinculados, em segundos. Ativar/inativar aciona o RPA (ver nota acima) |
+| **NextQS** | Consulta por email via API oficial — nome, email e perfil, em segundos. Status e ativar/inativar acionam o RPA (ver nota acima) |
 | **Google Workspace** | Usuários, grupos de email (com membros) e unidades organizacionais |
 | **Infomed** | Busca direta no banco Oracle do Infomed: ativar/inativar usuário, editar dados (nome/email), gerenciar perfis vinculados, corrigir preferências (expiração de senha, tentativas de login) |
-| **Férias** | Consulta de férias no Tangerino, com filtro por período/status |
-| **Ativação/Inativação manual** | Alternativa manual ao webhook — toggle Ativar/Inativar, escolhe os sistemas, dispara em paralelo. Usado tanto em contingência (webhook falhou) quanto pra reverter uma inativação feita por engano ou reativar alguém voltando de férias |
+| **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados. Só acessível pelo painel (não entra no fluxo automático) |
+| **Férias** | Consulta de férias no Tangerino (filtro por período/status) **e programação de desativação de acessos**: agenda início/fim das férias de um colaborador (manualmente ou a partir da lista do Tangerino), resolve automaticamente o email corporativo via AD pelo CPF (cai pro email pessoal do Tangerino se não achar), e escolhe quais sistemas pausar. Uma tarefa diária (7h) inativa quem entrou de férias e reativa quem voltou, sem intervenção manual |
+| **Ativação/Inativação manual** | Alternativa manual ao webhook — toggle Ativar/Inativar, escolhe entre os 10 sistemas integrados, dispara em paralelo. Usado tanto em contingência (webhook falhou) quanto pra reverter uma inativação feita por engano |
 | **Webhooks** | Inspeciona webhooks recebidos, reprocessa manualmente |
 | **Logs** | Visualização dos logs do sistema |
 
@@ -60,18 +66,21 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 
 - **Backend:** API REST com Flask + blueprint do painel web (`painel/`)
 - **Integração AD:** Protocolo LDAP sobre SSL (LDAPS)
-- **Integração Infomed:** Conexão direta ao banco Oracle (via `oracledb`, sem passar pela interface do sistema)
-- **RPA:** Playwright com Chromium (CRM, SAW, GIU, GED, Tasy)
+- **Integração GIU:** API REST oficial da Unimed do Brasil para consulta (`painel/giu_api.py`); ativação/inativação via RPA (Playwright + ZenRows Scraping Browser, que resolve o desafio Cloudflare Turnstile)
+- **Integração NextQS:** API REST oficial para consulta (`painel/nextqs_api.py`); ativação/inativação via RPA (Playwright + ZenRows)
+- **Integração Infomed e Pirâmide:** Conexão direta aos respectivos bancos Oracle (via `oracledb`, sem passar pela interface do sistema)
+- **RPA:** Playwright com Chromium (CRM, SAW, GED, Tasy, e GIU/NextQS quando a API não cobre a ação)
+- **Agendamento:** Tarefa diária (Agendador de Tarefas do Windows, 7h) para a programação de férias — ver `tarefa_ferias.py`
 - **Webhooks:** Recebimento de eventos do Solides
 - **Notificações:** Email via SMTP (Gmail)
 
 ## Fluxo
 
 ```
-Solides → Webhook → ngrok → Servidor Local → AD + Google Workspace + CRM + SAW + GIU + GED + Tasy + Infomed + Email
+Solides → Webhook → ngrok → Servidor Local → AD + Google Workspace + CRM + SAW + GIU + GED + Tasy + Infomed + NextQS + Email
 ```
 
-> NextQS e B+ Reembolso não fazem parte do fluxo atualmente (ver observações acima).
+> B+ Reembolso não faz parte do fluxo atualmente (ver observação acima). Pirâmide fica de fora do fluxo automático por decisão de negócio, mas está disponível na ativação/inativação manual.
 
 ## Instalação (ambiente local ou VM)
 
@@ -139,10 +148,25 @@ SAW_URL=https://saw.trixti.com.br/saw
 SAW_USERNAME=usuario
 SAW_PASSWORD=senha
 
-# GIU Unimed (login com CPF do admin)
+# GIU Unimed - RPA (login com CPF do admin, usado para ativar/inativar)
 GIU_URL=https://giu.unimed.coop.br
 GIU_USERNAME=000.000.000-00
 GIU_PASSWORD=sua-senha
+
+# GIU Unimed - API oficial (conta de serviço, usada para consulta)
+# A giu-api não expõe inativação nem edição: essas ações seguem no RPA acima
+GIU_CLIENT_ID=usuario-da-conta-de-servico
+GIU_CLIENT_SECRET=senha-da-conta-de-servico
+GIU_AMBIENTE=prd
+GIU_ID_UNIMED=196
+
+# ZenRows Scraping Browser - resolve o Turnstile do GIU/NextQS no RPA de ativar/inativar.
+# Autorizado pela Unimed do Brasil. Sem a key, o RPA usa o Chromium local (não
+# passa pelo desafio Cloudflare).
+ZENROWS_API_KEY=sua-api-key-do-zenrows
+ZENROWS_BROWSER_WSS=wss://browser.zenrows.com
+ZENROWS_PROXY_REGION=sa
+ZENROWS_SESSION_TTL=10m
 
 # GED Bye Bye Paper
 GED_URL=https://app.gedbyebyepaper.com.br
@@ -165,10 +189,26 @@ INFOMED_DB_SERVICE=
 # alternativa: INFOMED_DB_DSN + INFOMED_TNS_ADMIN (usa o alias do tnsnames.ora)
 # se der erro DPY-3015 (senha em formato antigo): INFOMED_ORACLE_CLIENT_DIR
 
-# NextQS Manager (não executado no fluxo - bloqueado por Cloudflare Turnstile)
+# Pirâmide (Oracle) - mesmo padrão do Infomed, ver opções A/B no env.example
+PIRAMIDE_DB_USER=
+PIRAMIDE_DB_PASSWORD=
+PIRAMIDE_DB_SCHEMA=PIRAMIDE
+PIRAMIDE_DB_HOST=
+PIRAMIDE_DB_PORT=1521
+PIRAMIDE_DB_SERVICE=
+# alternativa: PIRAMIDE_DB_DSN + PIRAMIDE_TNS_ADMIN
+# se der erro DPY-3015: PIRAMIDE_ORACLE_CLIENT_DIR
+
+# NextQS Manager - RPA (usado para status e ativar/inativar)
 NEXTQS_URL=https://manager.nextqs.com
 NEXTQS_USERNAME=seu-email@empresa.com
 NEXTQS_PASSWORD=sua-senha
+
+# NextQS Manager - API oficial (consulta de usuários). Token gerado em Next Manager > API.
+NEXTQS_API_TOKEN=seu-token-da-api
+NEXTQS_SITE_ID=
+# De-para dos perfis, já que a API só devolve o profile_id: id1=Agente,id2=Administrador
+NEXTQS_PERFIS=
 ```
 
 ### 2. Instalar ngrok
@@ -219,6 +259,21 @@ O painel acessa o banco Oracle do Infomed **direto** (sem passar pela tela do si
 - **Opção B:** `INFOMED_DB_DSN` (o alias que o PL/SQL Developer já usa, ex: `ORA_NOVA`) + `INFOMED_TNS_ADMIN` (pasta do `tnsnames.ora`)
 
 Se aparecer o erro `DPY-3015` (senha em formato pré-12c), instale o Oracle Instant Client e configure `INFOMED_ORACLE_CLIENT_DIR` apontando pra pasta dele — ativa o "modo thick", que entende os dois formatos de senha.
+
+### 5. Integração Pirâmide (Oracle)
+
+Mesmo padrão do Infomed: conexão direta ao banco Oracle da Pirâmide, sem passar pela tela do sistema. Configure `PIRAMIDE_DB_*` no `.env` (ver comentários completos no `env.example`); os erros `DPY-3015` e `getaddrinfo failed` se resolvem do mesmo jeito descrito acima para o Infomed.
+
+Diferente dos demais sistemas, a Pirâmide **não** entra no `SISTEMAS_CONFIG` do fluxo automático — só é acionada pela tela de Ativação/Inativação manual do painel ou por `inativar_manual.py --sistemas piramide`. O motivo está comentado no próprio `server.py`: inativar pode travar processos abertos que dependem do usuário ativo até serem concluídos.
+
+### 6. GIU e NextQS: API oficial + ZenRows (RPA)
+
+Os dois sistemas seguem o mesmo padrão híbrido:
+
+- A **consulta** (status, dados cadastrais, último acesso) é feita pela API REST oficial de cada fornecedor — instantânea, sem depender de navegador.
+- **Nenhuma das duas APIs** expõe endpoint de ativação/inativação hoje. Essa ação continua via RPA (Playwright).
+- As telas de login de ambos usam **Cloudflare Turnstile**, que bloqueia automação de navegador comum. O RPA contorna isso conectando num **navegador remoto do ZenRows** (Scraping Browser) via CDP, que resolve o desafio do lado deles antes de navegar — configurável com `ZENROWS_API_KEY` (ver bloco de variáveis acima). Sem essa chave, o RPA cai para o Chromium local, que não passa do desafio.
+- Solicitação em aberto com a Unimed do Brasil para que o GIU exponha um endpoint oficial de ativação/inativação — quando isso sair, o RPA (e a dependência do ZenRows) deixam de ser necessários para esse sistema.
 
 ## Execução (ambiente local)
 
@@ -286,7 +341,20 @@ Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para
 - URL: `https://xxxx.ngrok-free.app/webhook/solides`
 - Header: `X-Webhook-Secret` = mesmo valor do `.env`
 
-> **Dica:** se o terminal travar sozinho (só volta a responder depois de apertar Enter), é o **QuickEdit Mode** do console do Windows — qualquer clique/seleção na janela pausa a saída do programa. Desmarque em Propriedades **e** em Padrões (Defaults) da janela do CMD, e abra uma janela nova depois de mudar. Pra eliminar o problema de vez, considere rodar como **Serviço do Windows** (ex.: via NSSM), que não usa console interativo.
+> **Dica:** se o terminal travar sozinho (só volta a responder depois de apertar Enter), é o **QuickEdit Mode** do console do Windows — qualquer clique/seleção na janela pausa a saída do programa. Desmarque em Propriedades **e** em Padrões (Defaults) da janela do CMD, e abra uma janela nova depois de mudar.
+
+### 3. Manter o servidor sempre de pé (Agendador de Tarefas)
+
+Em produção, o `.bat` não é executado manualmente — uma **Tarefa Agendada do Windows** (`Integração Solides - server`) dispara o `iniciar_servidor_vm.bat` sozinha, com dois gatilhos: no logon do usuário configurado e também `AtStartup` (assim o servidor sobe mesmo que a VM reinicie sem login automático). A tarefa roda com `LogonType Password` (credencial armazenada de forma segura pelo Windows, sem expor senha em texto claro no Registro).
+
+> **Nunca rode `iniciar_servidor_vm.bat` manualmente enquanto essa tarefa existir** — isso abre um segundo processo de ngrok, e contas gratuitas só permitem uma sessão de túnel simultânea (a segunda tentativa falha com `ERR_NGROK_108`). Pra reiniciar o servidor, use a própria tarefa:
+> ```powershell
+> Restart-ScheduledTask -TaskName "Integração Solides - server"
+> # ou
+> schtasks /run /tn "Integração Solides - server"
+> ```
+
+Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo dia às 7h (ver seção [Painel Web](#painel-web) → Férias).
 
 ## Estrutura
 
@@ -300,16 +368,22 @@ Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para
 ├── rpa_ged.py                # RPA - GED Bye Bye Paper (email)
 ├── rpa_tasy.py               # RPA - Tasy EMR (nome completo + nome de conta)
 ├── rpa_infomed.py            # Ativa/inativa no Infomed via banco Oracle (email)
-├── rpa_nextqs.py             # RPA - NextQS Manager (não executado - bloqueado por Cloudflare)
+├── rpa_piramide.py           # Ativa/inativa na Pirâmide via banco Oracle (email) - só manual
+├── rpa_nextqs.py             # RPA - NextQS Manager (status/ativar/inativar, via ZenRows)
 ├── rpa_bplus.py              # RPA - B+ Reembolso (não ligado a nenhum fluxo)
+├── tarefa_ferias.py          # Tarefa diária (7h) que aplica os agendamentos de férias
 ├── inspecionar_pagina.py    # Ferramenta para mapear novos sites
 ├── painel/                   # Blueprint Flask do painel web
 │   ├── __init__.py            # Rotas
-│   ├── ad_gestao.py            # Busca/edição de usuários AD (horário, senha, bloqueio)
+│   ├── ad_gestao.py            # Busca/edição de usuários AD (geral, horário, senha, bloqueio)
 │   ├── auth_ad.py               # Login do painel via AD
 │   ├── tangerino.py             # Integração com API do Tangerino (colaboradores, férias)
 │   ├── google_workspace.py     # Usuários/grupos/OUs do Google Workspace
+│   ├── giu_api.py                # Cliente da API oficial do GIU (consulta)
+│   ├── nextqs_api.py             # Cliente da API oficial do NextQS (consulta)
 │   ├── infomed.py                # Conexão Oracle direta com o Infomed
+│   ├── piramide.py               # Conexão Oracle direta com a Pirâmide
+│   ├── agendamento_ferias.py    # Armazenamento/estado dos agendamentos de férias
 │   ├── jobs.py                    # Job em background da ativação/inativação manual
 │   ├── rpa_status_jobs.py        # Job em background da consulta de status (aba Sistemas)
 │   ├── webhooks.py                # Inspeção/reprocessamento de webhooks
@@ -320,7 +394,7 @@ Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para
 ├── logs/                      # Pasta de logs (criada automaticamente)
 │   ├── integracao_solides.log  # Log geral
 │   └── webhooks.log            # Log de webhooks
-├── data/                       # CSV de histórico de desligamentos
+├── data/                       # CSV de histórico de desligamentos, agendamentos_ferias.json
 ├── env.example                # Template de variáveis
 ├── requirements.txt           # Dependências Python
 └── README.md                  # Este arquivo
@@ -338,20 +412,21 @@ Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para
 
 ## Sistemas Integrados
 
-| Sistema | Script/Módulo | Identificador | No fluxo automático? | No painel (manual)? |
-|---------|---------------|---------------|:---:|:---:|
-| Active Directory | `painel/ad_gestao.py` (painel) | CPF | ✅ | ✅ |
-| Google Workspace | `google_admin.py` | Email | ✅ (opcional) | ✅ (leitura/gestão) |
-| CRM JMJ | `rpa_crm.py` | Email | ✅ | ✅ |
-| SAW | `rpa_saw.py` | Email | ✅ | ✅ |
-| GIU Unimed | `rpa_giu.py` | CPF | ✅ | ✅ |
-| GED Bye Bye Paper | `rpa_ged.py` | Email | ✅ | ✅ |
-| Tasy EMR | `rpa_tasy.py` | Nome completo + nome de conta | ✅ | ✅ |
-| Infomed | `rpa_infomed.py` / `painel/infomed.py` | Email corporativo | ✅ | ✅ |
-| NextQS Manager | `rpa_nextqs.py` | Email | ❌ (Cloudflare Turnstile bloqueia) | ❌ |
-| B+ Reembolso | `rpa_bplus.py` | Nome de conta | ❌ (nunca foi ligado) | ❌ |
+| Sistema | Consulta | Ativar/Inativar | Identificador | No fluxo automático? | No painel (manual)? |
+|---------|----------|------------------|---------------|:---:|:---:|
+| Active Directory | LDAP (`painel/ad_gestao.py`) | LDAP | CPF | ✅ | ✅ |
+| Google Workspace | API Admin SDK | API Admin SDK | Email | ✅ (opcional) | ✅ |
+| CRM JMJ | — | RPA (`rpa_crm.py`) | Email | ✅ | ✅ |
+| SAW | — | RPA (`rpa_saw.py`) | Email | ✅ | ✅ |
+| GIU Unimed | API oficial (`painel/giu_api.py`) | RPA + ZenRows (`rpa_giu.py`) | CPF | ✅ | ✅ |
+| GED Bye Bye Paper | — | RPA (`rpa_ged.py`) | Email | ✅ | ✅ |
+| Tasy EMR | — | RPA (`rpa_tasy.py`) | Nome completo + nome de conta | ✅ | ✅ |
+| Infomed | Oracle direto (`painel/infomed.py`) | Oracle direto / RPA (`rpa_infomed.py`) | Email corporativo | ✅ | ✅ |
+| Pirâmide | Oracle direto (`painel/piramide.py`) | Oracle direto / RPA (`rpa_piramide.py`) | Email corporativo | ❌ (decisão de negócio, ver nota acima) | ✅ |
+| NextQS Manager | API oficial (`painel/nextqs_api.py`) | RPA + ZenRows (`rpa_nextqs.py`) | Email | ✅ | ✅ |
+| B+ Reembolso | — | RPA (`rpa_bplus.py`) | Nome de conta | ❌ (nunca foi ligado) | ❌ |
 
-Todos os sistemas marcados com ✅ nos dois fluxos suportam **ativar e desativar** (não só desativar).
+Todos os sistemas marcados com ✅ em "Ativar/Inativar" suportam as duas direções (não só desativar). GIU e NextQS não têm endpoint oficial de ativação/inativação nas respectivas APIs — por isso essa ação específica segue via RPA mesmo tendo API de consulta.
 
 ## Proteção contra Duplicatas
 
@@ -386,7 +461,7 @@ python inativar_manual.py --cpf 01234567890 --email joao.silva@empresa.com.br --
 
 # Apenas sistemas específicos
 python inativar_manual.py --cpf 01234567890 --sistemas giu
-python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw ged infomed
+python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw ged infomed piramide nextqs google
 ```
 
 ### Parâmetros disponíveis
@@ -396,12 +471,32 @@ python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw g
 | `--cpf` | CPF do colaborador (usado no AD e GIU) |
 | `--email` | Email corporativo (usado nos demais sistemas) |
 | `--nome` | Nome completo (necessário para Tasy) |
-| `--sistemas` | Lista de sistemas: `ad`, `crm`, `saw`, `giu`, `ged`, `tasy`, `infomed` |
+| `--sistemas` | Lista de sistemas: `ad`, `crm`, `saw`, `giu`, `ged`, `tasy`, `infomed`, `piramide`, `nextqs`, `google` |
 | `--acao` | `ativar` ou `desativar` (padrão: `desativar`) |
 | `--pular-ad` | Não tentar mexer no Active Directory |
 | `--enviar-email` | Enviar email de notificação para o TI |
 
 > Reativação (`--acao ativar`) **não é registrada** no CSV de histórico de desligamentos, já que não é um desligamento — só desativações entram nesse histórico.
+
+## Programação de Desativação por Férias
+
+Além da consulta de férias (só leitura, puxada do Tangerino), o painel permite **agendar** a pausa de acessos durante o período de férias de um colaborador.
+
+**Como funciona:**
+
+1. Pela tela **Férias**, agenda-se um período — manualmente (nome, CPF, email, datas) ou a partir de uma linha da lista do Tangerino (pré-preenche os dados, útil também pra férias parceladas: um agendamento por período). Escolhe-se quais sistemas pausar (padrão: AD, Google, NextQS, GIU).
+2. Ao criar o agendamento, o sistema busca o colaborador no AD pelo CPF. Se houver email corporativo cadastrado, ele é usado nos sistemas que exigem email institucional; caso contrário, cai para o email pessoal informado no Tangerino.
+3. Os agendamentos ficam salvos em `data/agendamentos_ferias.json` (escrita atômica, sem depender de banco).
+4. A tarefa `tarefa_ferias.py`, disparada todo dia às 7h pela Tarefa Agendada **`Rotina Férias - Acessos`**, varre os agendamentos:
+   - Quem **começa** hoje e ainda não foi inativado → inativa nos sistemas escolhidos, e registra quais foram efetivamente pausados (só esses serão reativados depois).
+   - Quem **terminou** (data de fim já passou) e ainda não foi reativado → reativa exatamente os sistemas que tinham sido pausados.
+   - Falha em algum sistema → marca o agendamento para nova tentativa no dia seguinte, e entra no email de resumo enviado para o TI.
+
+Rodar manualmente (ex.: pra testar sem esperar o horário):
+
+```bash
+python tarefa_ferias.py
+```
 
 ## Logs
 
@@ -472,17 +567,7 @@ Falha de DNS/rede — a máquina onde o painel roda não consegue resolver o hos
 
 É o **QuickEdit Mode** do console do Windows (ver seção de execução em VM acima).
 
-## Criando RPA para Novos Sites
-
-Use o script de inspeção para mapear elementos de novos sistemas:
-
-```bash
-python inspecionar_pagina.py https://novo-sistema.com/login
-```
-
-O gravador captura cliques e digitação, gerando o código automaticamente.
-
 ---
 
 **Desenvolvido por:** Marcos Vinicius Viana Lima
-**Versão:** 3.0
+**Versão:** 4.0
