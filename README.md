@@ -40,7 +40,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **NextQS** | Consulta por email via API oficial — nome, email e perfil, em segundos. Status e ativar/inativar acionam o RPA (ver nota acima) |
 | **Google Workspace** | Usuários, grupos de email (com membros) e unidades organizacionais |
 | **Infomed** | Busca direta no banco Oracle do Infomed: ativar/inativar usuário, editar dados (nome/email), gerenciar perfis vinculados, corrigir preferências (expiração de senha, tentativas de login) |
-| **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados. Só acessível pelo painel (não entra no fluxo automático) |
+| **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados, e exibição da **Origem** (unidade) e do **Perfil default**, traduzidos das tabelas de referência do próprio ERP. Só acessível pelo painel (não entra no fluxo automático) |
 | **Férias** | Consulta de férias no Tangerino (filtro por período/status) **e programação de desativação de acessos**: agenda início/fim das férias de um colaborador (manualmente ou a partir da lista do Tangerino), resolve automaticamente o email corporativo via AD pelo CPF (cai pro email pessoal do Tangerino se não achar), e escolhe quais sistemas pausar. Uma tarefa diária (7h) inativa quem entrou de férias e reativa quem voltou, sem intervenção manual |
 | **Ativação/Inativação manual** | Alternativa manual ao webhook — toggle Ativar/Inativar, escolhe entre os 10 sistemas integrados, dispara em paralelo. Usado tanto em contingência (webhook falhou) quanto pra reverter uma inativação feita por engano |
 | **Webhooks** | Inspeciona webhooks recebidos, reprocessa manualmente |
@@ -55,7 +55,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **Flask-CORS** | 4.0.0 | Suporte a Cross-Origin Resource Sharing |
 | **LDAP3** | 2.9.1 | Conexão com Active Directory |
 | **Playwright** | 1.40.0+ | Automação de navegador (RPA) |
-| **oracledb** | - | Conexão direta com o banco Oracle do Infomed |
+| **oracledb** | - | Conexão direta com os bancos Oracle do Infomed e do Pirâmide |
 | **python-dotenv** | 1.0.0 | Gerenciamento de variáveis de ambiente |
 | **Requests** | 2.32.5 | Cliente HTTP |
 | **Waitress** | 3.0.0 | Servidor WSGI de produção |
@@ -265,6 +265,21 @@ Se aparecer o erro `DPY-3015` (senha em formato pré-12c), instale o Oracle Inst
 Mesmo padrão do Infomed: conexão direta ao banco Oracle da Pirâmide, sem passar pela tela do sistema. Configure `PIRAMIDE_DB_*` no `.env` (ver comentários completos no `env.example`); os erros `DPY-3015` e `getaddrinfo failed` se resolvem do mesmo jeito descrito acima para o Infomed.
 
 Diferente dos demais sistemas, a Pirâmide **não** entra no `SISTEMAS_CONFIG` do fluxo automático — só é acionada pela tela de Ativação/Inativação manual do painel ou por `inativar_manual.py --sistemas piramide`. O motivo está comentado no próprio `server.py`: inativar pode travar processos abertos que dependem do usuário ativo até serem concluídos.
+
+#### Origem e Perfil default
+
+Além dos dados cadastrais, a tela mostra a **Origem** (unidade) e o **Perfil default** do usuário. Os dois vêm como código na tabela `USUARIO` e são traduzidos por `LEFT JOIN` com as tabelas de referência do ERP, tanto em `buscar_usuarios` quanto em `obter_usuario`:
+
+| Campo na `USUARIO` | Tabela de referência | Coluna exibida | FK |
+|---|---|---|---|
+| `COD_UNID_ORIGEM` | `UNIDADE_ORIGEM` | `DSC_UNID_ORIGEM` | `FK_UNDORG_USR` |
+| `COD_PERFIL` | `PERFIL` | `NOM_PERFIL` | `FK_PER_USR` |
+
+O `LEFT JOIN` é proposital: usuário com código órfão (sem linha correspondente) ou nulo continua aparecendo na busca, mostrando só o código cru, em vez de sumir do resultado.
+
+Os rótulos **Origem** e **Perfil default** seguem a nomenclatura da própria tela do Pirâmide — não usar "Setor", que não existe no sistema.
+
+Obs.: `USUARIO.COD_CARGO` é outra coisa (FK `FK_CARGO_USR` → `CARGO_PESSOA`) e continua exibido como código, sem tradução.
 
 ### 6. GIU e NextQS: API oficial + ZenRows (RPA)
 
