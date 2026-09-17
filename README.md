@@ -38,9 +38,9 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **Active Directory** | Busca/filtra usuários do AD (nome, status, setor, OU), com paginação. Ao abrir um colaborador: aba **Geral** (edição de nome, email, setor, PIN de impressora e CPF), aba **Horários liberados** (logon hours, com botão de predefinir horário administrativo) e aba **Senha** (redefinir senha, bloquear/desbloquear conta). Cobre também contas sem CPF vinculado (antigas ou genéricas) que não aparecem em Colaboradores |
 | **GIU Unimed** | Consulta por CPF/CNPJ via API oficial — status, último acesso e aplicações/papéis vinculados, em segundos. Ativar/inativar aciona o RPA (ver nota acima) |
 | **NextQS** | Consulta por email via API oficial — nome, email e perfil, em segundos. Status e ativar/inativar acionam o RPA (ver nota acima) |
-| **Google Workspace** | Usuários, grupos de email (com membros) e unidades organizacionais |
+| **Google Workspace** | Usuários, grupos de email (com membros) e unidades organizacionais. Cada usuário tem um botão de detalhes com aba **Geral** (nome, email, setor, cargo, unidade organizacional) e aba **Grupos de email** (grupos que participa, com opção de adicionar a outro grupo ou remover) |
 | **Infomed** | Busca direta no banco Oracle do Infomed: ativar/inativar usuário, editar dados (nome/email), gerenciar perfis vinculados, corrigir preferências (expiração de senha, tentativas de login) |
-| **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados, e exibição da **Origem** (unidade) e do **Perfil default**, traduzidos das tabelas de referência do próprio ERP. Só acessível pelo painel (não entra no fluxo automático) |
+| **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados. Só acessível pelo painel (não entra no fluxo automático) |
 | **Férias** | Consulta de férias no Tangerino (filtro por período/status) **e programação de desativação de acessos**: agenda início/fim das férias de um colaborador (manualmente ou a partir da lista do Tangerino), resolve automaticamente o email corporativo via AD pelo CPF (cai pro email pessoal do Tangerino se não achar), e escolhe quais sistemas pausar. Uma tarefa diária (7h) inativa quem entrou de férias e reativa quem voltou, sem intervenção manual |
 | **Ativação/Inativação manual** | Alternativa manual ao webhook — toggle Ativar/Inativar, escolhe entre os 10 sistemas integrados, dispara em paralelo. Usado tanto em contingência (webhook falhou) quanto pra reverter uma inativação feita por engano |
 | **Webhooks** | Inspeciona webhooks recebidos, reprocessa manualmente |
@@ -55,7 +55,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **Flask-CORS** | 4.0.0 | Suporte a Cross-Origin Resource Sharing |
 | **LDAP3** | 2.9.1 | Conexão com Active Directory |
 | **Playwright** | 1.40.0+ | Automação de navegador (RPA) |
-| **oracledb** | - | Conexão direta com os bancos Oracle do Infomed e do Pirâmide |
+| **oracledb** | - | Conexão direta com o banco Oracle do Infomed |
 | **python-dotenv** | 1.0.0 | Gerenciamento de variáveis de ambiente |
 | **Requests** | 2.32.5 | Cliente HTTP |
 | **Waitress** | 3.0.0 | Servidor WSGI de produção |
@@ -226,10 +226,16 @@ Se quiser suspender automaticamente o email do colaborador demitido no Google Wo
 2. Ative **Domain-Wide Delegation** na Service Account e também o serviço Admin SDK Api na Biblioteca de APIs.
 3. No Admin Console Google, adicione o **Client ID** da Service Account em:
    - Security > API controls > Domain-wide delegation
-4. Autorize os scopes:
-   - `https://www.googleapis.com/auth/admin.directory.user` (usuários - leitura e suspensão)
-   - `https://www.googleapis.com/auth/admin.directory.group.readonly` (grupos - painel)
+4. Autorize os scopes (a string precisa ser **exatamente** essa, separada por vírgula, sem espaço):
+   - `https://www.googleapis.com/auth/admin.directory.user` (usuários — leitura e suspensão)
+   - `https://www.googleapis.com/auth/admin.directory.group` (grupos — criar/listar; usado pela tela de Grupos)
+   - `https://www.googleapis.com/auth/admin.directory.group.member` (participação em grupos — adicionar/remover membro, inclusive a remoção automática de todos os grupos antes de suspender)
    - `https://www.googleapis.com/auth/admin.directory.orgunit.readonly` (unidades organizacionais - painel)
+
+   String completa pra colar no campo "OAuth Scopes" do Admin Console:
+   ```
+   https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/admin.directory.orgunit.readonly
+   ```
 5. Configure no `.env`:
 
 ```env
@@ -241,6 +247,7 @@ GOOGLE_WORKSPACE_DOMAIN=empresa.com.br
 
 Regras aplicadas no fluxo de demissão:
 
+- Antes de suspender, o usuário é **removido de todos os grupos de email** que participa (usa a mesma função da tela de Grupos). Se a remoção de algum grupo falhar, a suspensão segue normalmente mesmo assim — a prioridade é a conta ficar bloqueada; falha parcial de grupo fica só num aviso no log, não impede o resto.
 - Se não houver email do colaborador, o Google é **pulado** e o processo continua.
 - Se o email do colaborador for igual ao admin delegado, o Google é **pulado**.
 - Se ocorrer erro no Google, os demais sistemas continuam normalmente.
@@ -250,6 +257,8 @@ Teste rápido de autenticação (PowerShell):
 ```powershell
 python -c "from dotenv import load_dotenv; load_dotenv('.env'); from google.oauth2 import service_account; from googleapiclient.discovery import build; import os; f=os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE'); a=os.getenv('GOOGLE_DELEGATED_ADMIN'); scopes=['https://www.googleapis.com/auth/admin.directory.user.readonly']; creds=service_account.Credentials.from_service_account_file(f, scopes=scopes).with_subject(a); svc=build('admin','directory_v1',credentials=creds,cache_discovery=False); resp=svc.users().get(userKey=a).execute(); print('OK Google Admin:', resp.get('primaryEmail'))"
 ```
+
+> Se depois de atualizar os scopes no Admin Console as chamadas de grupo (criar grupo, adicionar/remover membro, ou a remoção automática antes da suspensão) continuarem dando erro de permissão, aguarde alguns minutos — o Google às vezes demora para propagar uma mudança de domain-wide delegation — e confirme que a string colada bate exatamente com a de cima (a validação é por comparação exata da lista, não por "contém").
 
 ### 4. Integração Infomed (Oracle)
 
@@ -265,21 +274,6 @@ Se aparecer o erro `DPY-3015` (senha em formato pré-12c), instale o Oracle Inst
 Mesmo padrão do Infomed: conexão direta ao banco Oracle da Pirâmide, sem passar pela tela do sistema. Configure `PIRAMIDE_DB_*` no `.env` (ver comentários completos no `env.example`); os erros `DPY-3015` e `getaddrinfo failed` se resolvem do mesmo jeito descrito acima para o Infomed.
 
 Diferente dos demais sistemas, a Pirâmide **não** entra no `SISTEMAS_CONFIG` do fluxo automático — só é acionada pela tela de Ativação/Inativação manual do painel ou por `inativar_manual.py --sistemas piramide`. O motivo está comentado no próprio `server.py`: inativar pode travar processos abertos que dependem do usuário ativo até serem concluídos.
-
-#### Origem e Perfil default
-
-Além dos dados cadastrais, a tela mostra a **Origem** (unidade) e o **Perfil default** do usuário. Os dois vêm como código na tabela `USUARIO` e são traduzidos por `LEFT JOIN` com as tabelas de referência do ERP, tanto em `buscar_usuarios` quanto em `obter_usuario`:
-
-| Campo na `USUARIO` | Tabela de referência | Coluna exibida | FK |
-|---|---|---|---|
-| `COD_UNID_ORIGEM` | `UNIDADE_ORIGEM` | `DSC_UNID_ORIGEM` | `FK_UNDORG_USR` |
-| `COD_PERFIL` | `PERFIL` | `NOM_PERFIL` | `FK_PER_USR` |
-
-O `LEFT JOIN` é proposital: usuário com código órfão (sem linha correspondente) ou nulo continua aparecendo na busca, mostrando só o código cru, em vez de sumir do resultado.
-
-Os rótulos **Origem** e **Perfil default** seguem a nomenclatura da própria tela do Pirâmide — não usar "Setor", que não existe no sistema.
-
-Obs.: `USUARIO.COD_CARGO` é outra coisa (FK `FK_CARGO_USR` → `CARGO_PESSOA`) e continua exibido como código, sem tradução.
 
 ### 6. GIU e NextQS: API oficial + ZenRows (RPA)
 
