@@ -171,6 +171,7 @@
           <th>Cargo</th>
           <th>Desligamento</th>
           <th>Status</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="corpo-historico">
@@ -186,6 +187,16 @@
           <td>{{ linha.cargo or '—' }}</td>
           <td class="mono">{{ linha.data_desligamento or '—' }}</td>
           <td><span class="badge badge-{{ status_grupo }}">{{ status }}</span></td>
+          <td>
+            <button type="button" class="botao-olho" title="Ver detalhes"
+                    onclick='abrirDetalheDesligado({{ linha.cpf|tojson }}, {{ linha.cpf_mascarado|tojson }}, {{ linha.nome_colaborador|tojson }}, {{ linha.matricula|tojson }}, {{ linha.email|tojson }}, {{ linha.setor|tojson }}, {{ linha.cargo|tojson }})'>
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+              </svg>
+            </button>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -195,6 +206,44 @@
   {% else %}
   <div class="estado-vazio">Nenhum desligamento registrado ainda.</div>
   {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-desligado" onclick="fecharDetalheDesligadoFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="desligado-nome">—</div>
+        <div class="modal-subtitulo" id="desligado-cpf">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharDetalheDesligado()">&times;</button>
+    </div>
+
+    <div style="padding:0 20px;">
+      <div class="abas">
+        <button type="button" class="aba ativa" data-aba="geral" onclick="trocarAbaDesligado('geral')">Geral</button>
+        <button type="button" class="aba" data-aba="sistemas" onclick="trocarAbaDesligado('sistemas')">Sistemas</button>
+      </div>
+    </div>
+
+    <div style="padding:16px 20px;">
+      <!-- ABA GERAL -->
+      <div class="aba-conteudo" id="aba-desligado-geral">
+        <div class="detalhe-linha"><span class="detalhe-rotulo">CPF</span><span id="desligado-campo-cpf" class="mono">—</span></div>
+        <div class="detalhe-linha"><span class="detalhe-rotulo">Nome</span><span id="desligado-campo-nome">—</span></div>
+        <div class="detalhe-linha"><span class="detalhe-rotulo">Matrícula</span><span id="desligado-campo-matricula" class="mono">—</span></div>
+        <div class="detalhe-linha"><span class="detalhe-rotulo">Email</span><span id="desligado-campo-email">—</span></div>
+        <div class="detalhe-linha"><span class="detalhe-rotulo">Telefone</span><span id="desligado-campo-telefone" class="mono">Carregando…</span></div>
+        <div class="detalhe-linha"><span class="detalhe-rotulo">Setor</span><span id="desligado-campo-setor">—</span></div>
+        <div class="detalhe-linha"><span class="detalhe-rotulo">Cargo</span><span id="desligado-campo-cargo">—</span></div>
+      </div>
+
+      <!-- ABA SISTEMAS -->
+      <div class="aba-conteudo" id="aba-desligado-sistemas" style="display:none;">
+        <div id="desligado-sistemas-carregando" style="font-size:13px; color:var(--text-secondary);">Carregando…</div>
+        <div id="desligado-sistemas-lista"></div>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -457,6 +506,86 @@
       });
     }
     aplicarOrdenacaoEFiltro(); // aplica o padrão (15 mais recentes) já na primeira carga
+  }
+
+  // ---------- modal de detalhes do colaborador desligado ----------
+  let desligadoCpfAtual = null;
+
+  function abrirDetalheDesligado(cpf, cpfMascarado, nome, matricula, email, setor, cargo) {
+    desligadoCpfAtual = cpf;
+    document.getElementById('modal-desligado').classList.add('aberto');
+    document.getElementById('desligado-nome').textContent = nome || '—';
+    document.getElementById('desligado-cpf').textContent = cpfMascarado || '—';
+    document.getElementById('desligado-campo-cpf').textContent = cpfMascarado || '—';
+    document.getElementById('desligado-campo-nome').textContent = nome || '—';
+    document.getElementById('desligado-campo-matricula').textContent = matricula || '—';
+    document.getElementById('desligado-campo-email').textContent = email || '—';
+    document.getElementById('desligado-campo-telefone').textContent = 'Carregando…';
+    document.getElementById('desligado-campo-setor').textContent = setor || '—';
+    document.getElementById('desligado-campo-cargo').textContent = cargo || '—';
+    trocarAbaDesligado('geral');
+    carregarExtrasDesligado(cpf);
+  }
+
+  function fecharDetalheDesligado() {
+    document.getElementById('modal-desligado').classList.remove('aberto');
+    desligadoCpfAtual = null;
+  }
+
+  function fecharDetalheDesligadoFora(evento) {
+    if (evento.target.id === 'modal-desligado') fecharDetalheDesligado();
+  }
+
+  function trocarAbaDesligado(aba) {
+    document.querySelectorAll('#modal-desligado .aba').forEach(b => {
+      b.classList.toggle('ativa', b.dataset.aba === aba);
+    });
+    document.getElementById('aba-desligado-geral').style.display = aba === 'geral' ? 'block' : 'none';
+    document.getElementById('aba-desligado-sistemas').style.display = aba === 'sistemas' ? 'block' : 'none';
+  }
+
+  const STATUS_SISTEMA_LABEL = {
+    sucesso: ['Desativado', 'sucesso'],
+    ja_inativo: ['Já estava inativo', 'sucesso'],
+    nao_encontrado: ['Não encontrado', 'pendente'],
+    skipped: ['Não executado', 'pendente'],
+    erro: ['Erro', 'erro'],
+  };
+
+  async function carregarExtrasDesligado(cpf) {
+    const telefoneEl = document.getElementById('desligado-campo-telefone');
+    const carregando = document.getElementById('desligado-sistemas-carregando');
+    const lista = document.getElementById('desligado-sistemas-lista');
+    carregando.style.display = 'block';
+    lista.innerHTML = '';
+
+    try {
+      const resp = await fetch(`/painel/api/dashboard/desligamento/${encodeURIComponent(cpf)}`);
+      const json = await resp.json();
+
+      telefoneEl.textContent = (resp.ok && json.telefone) ? json.telefone : '—';
+
+      carregando.style.display = 'none';
+      const sistemas = (resp.ok && json.sistemas) || [];
+      if (!sistemas.length) {
+        lista.innerHTML = '<div class="estado-vazio">Sem histórico de sistemas para este desligamento.</div>';
+        return;
+      }
+      let html = '<table class="tabela tabela-compacta"><thead><tr><th style="width:70%;">Sistema</th><th style="width:30%;">Status</th></tr></thead><tbody>';
+      for (const s of sistemas) {
+        const [label, cor] = STATUS_SISTEMA_LABEL[s.status] || [s.status || '—', 'pendente'];
+        html += `<tr>
+          <td class="celula-truncada" title="${s.sistema}">${s.sistema}</td>
+          <td><span class="badge badge-${cor}">${label}</span></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      lista.innerHTML = html;
+    } catch (e) {
+      telefoneEl.textContent = '—';
+      carregando.style.display = 'none';
+      lista.innerHTML = '<div class="aviso aviso-erro">Falha ao carregar os detalhes.</div>';
+    }
   }
 </script>
 {% endblock %}

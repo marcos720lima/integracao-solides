@@ -241,7 +241,7 @@ def ad_buscar_por_employee_id(employee_id, utc_offset_hours=-3):
         search_base=base_dn,
         search_filter=f"(&(objectCategory=person)(objectClass=user)(employeeID={safe_id}))",
         search_scope=SUBTREE,
-        attributes=["distinguishedName", "displayName", "sAMAccountName", "mail", "userAccountControl", "logonHours", "employeeID"],
+        attributes=["distinguishedName", "displayName", "sAMAccountName", "mail", "userAccountControl", "logonHours", "employeeID", "telephoneNumber"],
         size_limit=2,
     )
 
@@ -264,6 +264,7 @@ def ad_buscar_por_employee_id(employee_id, utc_offset_hours=-3):
         "displayName": _primeiro("displayName"),
         "sam": _primeiro("sAMAccountName"),
         "mail": _primeiro("mail"),
+        "telefone": _primeiro("telephoneNumber"),
         "employeeID": _primeiro("employeeID"),
         "disabled": disabled,
         "ou": extract_ou_path(dn),
