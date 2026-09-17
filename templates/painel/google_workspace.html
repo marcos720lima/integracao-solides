@@ -25,6 +25,14 @@
         <label for="q">Buscar</label>
         <input type="text" id="q" name="q" value="{{ q }}" placeholder="Nome ou email">
       </div>
+      <div class="campo-toolbar">
+        <label for="status">Status</label>
+        <select id="status" name="status">
+          <option value="todos" {{ 'selected' if status_filtro == 'todos' }}>Todos</option>
+          <option value="ativo" {{ 'selected' if status_filtro == 'ativo' }}>Ativos</option>
+          <option value="suspenso" {{ 'selected' if status_filtro == 'suspenso' }}>Suspensos</option>
+        </select>
+      </div>
       <button type="submit" class="btn btn-primario">Buscar</button>
     </form>
 
@@ -38,6 +46,7 @@
             <th>Unidade organizacional</th>
             <th>Status</th>
             <th>Último login</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -48,6 +57,15 @@
             <td>{{ u.unidade_organizacional }}</td>
             <td><span class="badge badge-{{ 'erro' if u.suspenso else 'sucesso' }}">{{ 'Suspenso' if u.suspenso else 'Ativo' }}</span></td>
             <td class="mono">{{ u.ultimo_login or 'Nunca' }}</td>
+            <td>
+              <button type="button" class="botao-olho" title="Ver detalhes" onclick="abrirDetalheGoogleUsuario('{{ u.email }}')">
+                <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" fill="currentColor" fill-opacity="0.18"/>
+                  <path d="M1 10C2.8 5.8 6 3.5 10 3.5S17.2 5.8 19 10c-1.8 4.2-5 6.5-9 6.5S2.8 14.2 1 10Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                  <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+                </svg>
+              </button>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -170,6 +188,52 @@
     {% endif %}
   {% endif %}
 </div>
+
+<div class="modal-overlay" id="modal-google-usuario" onclick="fecharDetalheGoogleUsuarioFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="google-user-nome">—</div>
+        <div class="modal-subtitulo" id="google-user-email">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharDetalheGoogleUsuario()">&times;</button>
+    </div>
+
+    <div style="padding:0 20px;">
+      <div class="abas">
+        <button type="button" class="aba ativa" data-aba="geral" onclick="trocarAbaGoogleUsuario('geral')">Geral</button>
+        <button type="button" class="aba" data-aba="grupos" onclick="trocarAbaGoogleUsuario('grupos')">Grupos de email</button>
+      </div>
+    </div>
+
+    <div style="padding:16px 20px;">
+      <div class="aviso aviso-erro" id="google-user-erro" style="display:none;"></div>
+
+      <!-- ABA GERAL -->
+      <div class="aba-conteudo" id="aba-google-geral">
+        <div id="google-user-carregando" style="font-size:13px; color:var(--text-secondary);">Carregando…</div>
+        <div id="google-user-dados" style="display:none;">
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Nome</span><span id="google-user-campo-nome">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Email</span><span id="google-user-campo-email" class="mono">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Setor</span><span id="google-user-campo-setor">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Cargo</span><span id="google-user-campo-cargo">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Unidade organizacional</span><span id="google-user-campo-ou" class="mono">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Status</span><span id="google-user-campo-status">—</span></div>
+        </div>
+      </div>
+
+      <!-- ABA GRUPOS -->
+      <div class="aba-conteudo" id="aba-google-grupos" style="display:none;">
+        <div style="display:flex; gap:8px; margin-bottom:16px;">
+          <input type="email" id="google-user-novo-grupo" placeholder="grupo@empresa.com" style="flex:1; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; font-size:13px; background:var(--card-bg); color:var(--text-primary);">
+          <button type="button" class="btn btn-primario" onclick="adicionarUsuarioAoGrupo()">Adicionar a grupo</button>
+        </div>
+        <div id="google-user-grupos-carregando" style="font-size:13px; color:var(--text-secondary);">Carregando grupos…</div>
+        <div id="google-user-grupos-lista"></div>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -241,6 +305,152 @@
       setTimeout(() => window.location.reload(), 900);
     } catch (e) {
       mostrarToast('Falha ao remover membro.', 'erro');
+    }
+  }
+
+  // ---------- modal de detalhes do usuario ----------
+  let googleUserEmailAtual = null;
+
+  function abrirDetalheGoogleUsuario(email) {
+    googleUserEmailAtual = email;
+    document.getElementById('modal-google-usuario').classList.add('aberto');
+    document.getElementById('google-user-nome').textContent = 'Carregando…';
+    document.getElementById('google-user-email').textContent = email;
+    document.getElementById('google-user-erro').style.display = 'none';
+    trocarAbaGoogleUsuario('geral');
+    carregarDetalheGoogleUsuario(email);
+    carregarGruposDoUsuario(email);
+  }
+
+  function fecharDetalheGoogleUsuario() {
+    document.getElementById('modal-google-usuario').classList.remove('aberto');
+    googleUserEmailAtual = null;
+  }
+
+  function fecharDetalheGoogleUsuarioFora(evento) {
+    if (evento.target.id === 'modal-google-usuario') fecharDetalheGoogleUsuario();
+  }
+
+  function trocarAbaGoogleUsuario(aba) {
+    document.querySelectorAll('#modal-google-usuario .aba').forEach(b => {
+      b.classList.toggle('ativa', b.dataset.aba === aba);
+    });
+    document.getElementById('aba-google-geral').style.display = aba === 'geral' ? 'block' : 'none';
+    document.getElementById('aba-google-grupos').style.display = aba === 'grupos' ? 'block' : 'none';
+  }
+
+  async function carregarDetalheGoogleUsuario(email) {
+    const carregando = document.getElementById('google-user-carregando');
+    const dadosEl = document.getElementById('google-user-dados');
+    const erro = document.getElementById('google-user-erro');
+    carregando.style.display = 'block';
+    dadosEl.style.display = 'none';
+    erro.style.display = 'none';
+
+    try {
+      const resp = await fetch(`/painel/api/google-workspace/usuario/${encodeURIComponent(email)}`);
+      const json = await resp.json();
+      if (!resp.ok) {
+        carregando.style.display = 'none';
+        erro.style.display = 'block';
+        erro.textContent = json.erro || 'Falha ao carregar.';
+        return;
+      }
+      document.getElementById('google-user-nome').textContent = json.nome || email;
+      document.getElementById('google-user-campo-nome').textContent = json.nome || '—';
+      document.getElementById('google-user-campo-email').textContent = json.email || '—';
+      document.getElementById('google-user-campo-setor').textContent = json.setor || '—';
+      document.getElementById('google-user-campo-cargo').textContent = json.cargo || '—';
+      document.getElementById('google-user-campo-ou').textContent = json.unidade_organizacional || '—';
+      document.getElementById('google-user-campo-status').innerHTML =
+        `<span class="badge badge-${json.suspenso ? 'erro' : 'sucesso'}">${json.suspenso ? 'Suspenso' : 'Ativo'}</span>`;
+      carregando.style.display = 'none';
+      dadosEl.style.display = 'block';
+    } catch (e) {
+      carregando.style.display = 'none';
+      erro.style.display = 'block';
+      erro.textContent = 'Falha ao carregar os dados do usuário.';
+    }
+  }
+
+  async function carregarGruposDoUsuario(email) {
+    const carregando = document.getElementById('google-user-grupos-carregando');
+    const lista = document.getElementById('google-user-grupos-lista');
+    carregando.style.display = 'block';
+    lista.innerHTML = '';
+
+    try {
+      const resp = await fetch(`/painel/api/google-workspace/usuario/${encodeURIComponent(email)}/grupos`);
+      const json = await resp.json();
+      carregando.style.display = 'none';
+      if (!resp.ok) {
+        lista.innerHTML = `<div class="aviso aviso-erro">${json.erro || 'Falha ao carregar grupos.'}</div>`;
+        return;
+      }
+      const grupos = json.grupos || [];
+      if (!grupos.length) {
+        lista.innerHTML = '<div class="estado-vazio">Não participa de nenhum grupo.</div>';
+        return;
+      }
+      let html = `<table class="tabela tabela-compacta">
+        <thead><tr>
+          <th style="width:42%;">Nome</th>
+          <th style="width:40%;">Email</th>
+          <th style="width:18%;"></th>
+        </tr></thead>
+        <tbody>`;
+      for (const g of grupos) {
+        html += `<tr>
+          <td class="celula-truncada" title="${g.nome}">${g.nome}</td>
+          <td class="mono celula-truncada" title="${g.email}">${g.email}</td>
+          <td><button type="button" class="btn-limpar-filtros" onclick="removerUsuarioDoGrupo('${g.email}')">Remover</button></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      lista.innerHTML = html;
+    } catch (e) {
+      carregando.style.display = 'none';
+      lista.innerHTML = '<div class="aviso aviso-erro">Falha ao carregar grupos.</div>';
+    }
+  }
+
+  async function adicionarUsuarioAoGrupo() {
+    const emailGrupo = document.getElementById('google-user-novo-grupo').value.trim();
+    if (!emailGrupo) { mostrarToast('Informe o email do grupo.', 'erro'); return; }
+    if (!googleUserEmailAtual) return;
+
+    try {
+      const resposta = await fetch(`/painel/api/google-workspace/grupos/${encodeURIComponent(emailGrupo)}/membros`, {
+        method: 'POST', body: new URLSearchParams({ email_membro: googleUserEmailAtual }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        mostrarToast(dados.erro || 'Falha ao adicionar ao grupo.', 'erro');
+        return;
+      }
+      mostrarToast(dados.mensagem, 'sucesso');
+      document.getElementById('google-user-novo-grupo').value = '';
+      carregarGruposDoUsuario(googleUserEmailAtual);
+    } catch (e) {
+      mostrarToast('Falha ao adicionar ao grupo.', 'erro');
+    }
+  }
+
+  async function removerUsuarioDoGrupo(emailGrupo) {
+    if (!googleUserEmailAtual) return;
+    try {
+      const resposta = await fetch(`/painel/api/google-workspace/grupos/${encodeURIComponent(emailGrupo)}/membros/remover`, {
+        method: 'POST', body: new URLSearchParams({ email_membro: googleUserEmailAtual }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        mostrarToast(dados.erro || 'Falha ao remover do grupo.', 'erro');
+        return;
+      }
+      mostrarToast(dados.mensagem, 'sucesso');
+      carregarGruposDoUsuario(googleUserEmailAtual);
+    } catch (e) {
+      mostrarToast('Falha ao remover do grupo.', 'erro');
     }
   }
 </script>

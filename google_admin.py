@@ -2,7 +2,8 @@ import os
 
 SCOPES = [
     "https://www.googleapis.com/auth/admin.directory.user",
-    "https://www.googleapis.com/auth/admin.directory.group.readonly",
+    "https://www.googleapis.com/auth/admin.directory.group",
+    "https://www.googleapis.com/auth/admin.directory.group.member",
     "https://www.googleapis.com/auth/admin.directory.orgunit.readonly",
 ]
 
@@ -73,9 +74,42 @@ def inativar_email_google_workspace(email: str | None) -> dict:
     except Exception as exc:
         return {"sistema": nome_sistema, "status": "erro", "erro": f"Dependências Google ausentes: {exc}"}
 
+    # Antes de suspender, remove o usuario de todos os grupos de email que ele
+    # participa. Import local para evitar import circular (google_workspace.py
+    # importa deste modulo no topo do arquivo).
+    grupos_removidos = 0
+    grupos_total = 0
+    grupos_status = "sem_grupos"
+    try:
+        from painel.google_workspace import remover_de_todos_os_grupos
+        resultados_grupos = remover_de_todos_os_grupos(email)
+        grupos_total = len(resultados_grupos)
+        grupos_removidos = sum(1 for r in resultados_grupos if r["ok"])
+        falhas = [r for r in resultados_grupos if not r["ok"]]
+
+        if grupos_total == 0:
+            grupos_status = "sem_grupos"
+        elif not falhas:
+            grupos_status = "sucesso"
+        elif grupos_removidos > 0:
+            grupos_status = "parcial"
+        else:
+            grupos_status = "erro"
+
+        if falhas:
+            print(f"[Google] Aviso: falha ao remover {email} de {len(falhas)} grupo(s): "
+                  f"{[f['mensagem'] for f in falhas]}")
+    except Exception as exc:
+        grupos_status = "erro"
+        print(f"[Google] Aviso: não foi possível remover grupos de {email} antes da suspensão: {exc}")
+
     try:
         service.users().patch(userKey=email, body={"suspended": True}).execute()
-        return {"sistema": nome_sistema, "status": "sucesso"}
+        return {
+            "sistema": nome_sistema, "status": "sucesso",
+            "grupos_removidos": grupos_removidos, "grupos_total": grupos_total,
+            "grupos_status": grupos_status,
+        }
     except HttpError as exc:
         status_code = getattr(getattr(exc, "resp", None), "status", None)
         if status_code == 404:

@@ -207,6 +207,80 @@ def remover_membro_grupo(email_grupo, email_membro):
         return False, f"Falha ao remover membro: {detalhe}"
 
 
+def listar_grupos_do_usuario(email):
+    """Lista os grupos de email que um usuario especifico participa.
+
+    A API do Google exige que 'userKey' seja usado SOZINHO — nao aceita
+    'customer' junto (erro 400 'Cannot be used with the customer parameter').
+    """
+    service = obter_service_admin()
+
+    grupos = []
+    page_token = None
+    paginas = 0
+
+    while True:
+        parametros = {"userKey": email, "maxResults": 200}
+        if page_token:
+            parametros["pageToken"] = page_token
+        resposta = service.groups().list(**parametros).execute()
+
+        for g in resposta.get("groups", []):
+            grupos.append({
+                "email": g.get("email", ""),
+                "nome": g.get("name", ""),
+            })
+
+        page_token = resposta.get("nextPageToken")
+        paginas += 1
+        if not page_token or paginas >= LIMITE_PAGINAS_SEGURANCA:
+            break
+
+    grupos.sort(key=lambda g: g["nome"].lower())
+    return grupos
+
+
+def remover_de_todos_os_grupos(email):
+    """Remove o usuario de todos os grupos de email que participa.
+
+    Usado antes de suspender a conta (inativação). Continua tentando mesmo se
+    uma remoção específica falhar, e devolve o resultado de cada grupo para
+    quem chamou decidir o que fazer com falhas parciais.
+    """
+    try:
+        grupos = listar_grupos_do_usuario(email)
+    except Exception as exc:
+        return [{"grupo": None, "ok": False, "mensagem": f"Falha ao listar grupos do usuário: {exc}"}]
+
+    resultados = []
+    for g in grupos:
+        ok, mensagem = remover_membro_grupo(g["email"], email)
+        resultados.append({"grupo": g["email"], "ok": ok, "mensagem": mensagem})
+    return resultados
+
+
+def obter_usuario_detalhado(email):
+    """Busca o perfil completo de um usuário — inclui setor/cargo, que a
+    listagem básica de listar_usuarios() não traz (precisa de projection=full)."""
+    service = obter_service_admin()
+    u = service.users().get(userKey=email, projection="full").execute()
+
+    nome = u.get("name", {})
+    organizacoes = u.get("organizations") or []
+    org_principal = next((o for o in organizacoes if o.get("primary")),
+                          organizacoes[0] if organizacoes else {})
+
+    return {
+        "email": u.get("primaryEmail", ""),
+        "nome": nome.get("fullName") or f"{nome.get('givenName', '')} {nome.get('familyName', '')}".strip(),
+        "setor": org_principal.get("department") or "",
+        "cargo": org_principal.get("title") or "",
+        "unidade_organizacional": u.get("orgUnitPath", "/"),
+        "suspenso": bool(u.get("suspended")),
+        "admin": bool(u.get("isAdmin")),
+    }
+
+
 def listar_unidades_organizacionais():
     service = obter_service_admin()
     resposta = service.orgunits().list(customerId="my_customer", type="all").execute()

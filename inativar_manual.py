@@ -196,7 +196,12 @@ def definir_ativo_google(email, ativar):
             r = inativar_email_google_workspace(email)
             status = r.get('status')
             if status == 'sucesso':
-                return {'status': 'sucesso', 'msg': f'Usuário {email} suspenso no Google Workspace'}
+                return {
+                    'status': 'sucesso', 'msg': f'Usuário {email} suspenso no Google Workspace',
+                    'grupos_status': r.get('grupos_status'),
+                    'grupos_removidos': r.get('grupos_removidos'),
+                    'grupos_total': r.get('grupos_total'),
+                }
             if status == 'skipped':
                 return {'status': 'pulado', 'msg': r.get('motivo', 'Ignorado')}
             if status == 'nao_encontrado':
@@ -335,7 +340,12 @@ def converter_resultados_para_formato_server(resultados):
         detalhes.append({
             'sistema': nome_sistema,
             'status': status_server,
-            'erro': resultado.get('msg', '') if status == 'erro' else None
+            'erro': resultado.get('msg', '') if status == 'erro' else None,
+            # campos extras do Google Workspace (retirada de grupos antes da
+            # suspensão) - server.py le esses campos se o sistema for 'google'
+            'grupos_status': resultado.get('grupos_status'),
+            'grupos_removidos': resultado.get('grupos_removidos'),
+            'grupos_total': resultado.get('grupos_total'),
         })
     
     return {'detalhes': detalhes}
