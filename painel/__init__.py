@@ -1,4 +1,5 @@
 import functools
+import json
 import os
 from datetime import date, datetime, timedelta, timezone
 
@@ -27,10 +28,12 @@ from painel.google_workspace import (
     criar_usuario_google,
     email_existe_no_google,
     listar_grupos,
+    listar_grupos_do_usuario,
     listar_membros_grupo,
     listar_unidades_organizacionais,
     listar_usuarios,
     obter_status_google,
+    obter_usuario_detalhado,
     remover_membro_grupo,
 )
 from painel.infomed import InfomedConfigError, buscar_usuarios as infomed_buscar_usuarios
@@ -174,6 +177,38 @@ def dashboard():
         historico=historico[:LIMITE_MAXIMO_HISTORICO],
         limite_maximo=LIMITE_MAXIMO_HISTORICO,
     )
+
+
+@painel_bp.route("/api/dashboard/desligamento/<cpf>")
+@login_obrigatorio
+def api_dashboard_detalhe_desligamento(cpf):
+    """Detalhes extras do card do colaborador desligado (dashboard): telefone
+    (busca ao vivo no AD, pois nao fica salvo no historico) e o histórico de
+    sistemas inativados daquele desligamento (salvo no CSV)."""
+    cpf_normalizado = "".join(c for c in (cpf or "") if c.isdigit())
+
+    telefone = None
+    try:
+        usuario_ad = ad_buscar_por_employee_id(cpf_normalizado, UTC_OFFSET_HOURS)
+        if usuario_ad:
+            telefone = usuario_ad.get("telefone") or None
+    except Exception:
+        pass  # AD indisponivel/usuario ja removido: segue sem telefone
+
+    sistemas = []
+    try:
+        historico = ler_historico_desligamentos()
+        linha = next(
+            (h for h in historico
+             if "".join(c for c in (h.get("cpf") or "") if c.isdigit()) == cpf_normalizado),
+            None,
+        )
+        if linha and linha.get("detalhes_sistemas"):
+            sistemas = json.loads(linha["detalhes_sistemas"])
+    except Exception:
+        sistemas = []
+
+    return jsonify({"telefone": telefone, "sistemas": sistemas})
 
 
 @painel_bp.route("/api/status-execucao")
@@ -524,6 +559,9 @@ def tela_google_workspace():
         aba = "usuarios"
 
     q = request.args.get("q", "").strip()
+    status_filtro = request.args.get("status", "todos").strip()
+    if status_filtro not in ("todos", "ativo", "suspenso"):
+        status_filtro = "todos"
     grupo_selecionado = request.args.get("grupo", "").strip()
 
     erro = None
@@ -532,6 +570,10 @@ def tela_google_workspace():
     try:
         if aba == "usuarios":
             usuarios = listar_usuarios(query=q or None)
+            if status_filtro == "ativo":
+                usuarios = [u for u in usuarios if not u.get("suspenso")]
+            elif status_filtro == "suspenso":
+                usuarios = [u for u in usuarios if u.get("suspenso")]
         elif aba == "grupos":
             grupos = listar_grupos()
             if grupo_selecionado:
@@ -545,7 +587,7 @@ def tela_google_workspace():
 
     return render_template(
         "google_workspace.html",
-        aba=aba, q=q, erro=erro,
+        aba=aba, q=q, status_filtro=status_filtro, erro=erro,
         usuarios=usuarios, grupos=grupos, unidades=unidades,
         grupo_selecionado=grupo_selecionado, membros_grupo=membros_grupo,
     )
@@ -609,6 +651,39 @@ def api_google_remover_membro(email_grupo):
     if not ok:
         return jsonify({"erro": mensagem}), 400
     return jsonify({"mensagem": mensagem, "email_membro": email_membro})
+
+
+@painel_bp.route("/api/google-workspace/usuario/<email>")
+@login_obrigatorio
+def api_google_detalhes_usuario(email):
+    try:
+        dados = obter_usuario_detalhado(email)
+    except GoogleAdminConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        status = getattr(getattr(e, "resp", None), "status", None)
+        if status == 404:
+            return jsonify({"erro": "Usuário não encontrado no Google."}), 404
+        import traceback
+        print(f"[Google] Falha ao consultar usuário {email}:\n{traceback.format_exc()}")
+        detalhe = str(e) or f"{type(e).__name__} (sem mensagem — veja o log do servidor)"
+        return jsonify({"erro": f"Falha ao consultar o usuário: {detalhe}"}), 502
+    return jsonify(dados)
+
+
+@painel_bp.route("/api/google-workspace/usuario/<email>/grupos")
+@login_obrigatorio
+def api_google_grupos_do_usuario(email):
+    try:
+        grupos = listar_grupos_do_usuario(email)
+    except GoogleAdminConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        import traceback
+        print(f"[Google] Falha ao listar grupos de {email}:\n{traceback.format_exc()}")
+        detalhe = str(e) or f"{type(e).__name__} (sem mensagem — veja o log do servidor)"
+        return jsonify({"erro": f"Falha ao listar grupos do usuário: {detalhe}"}), 502
+    return jsonify({"grupos": grupos})
 
 
 @painel_bp.route("/api/colaboradores/<cpf>/acesso")

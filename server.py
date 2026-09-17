@@ -284,6 +284,29 @@ def obter_status_formatado(sistema, usar_bloqueado=False):
     return STATUS_NAO_EXECUTADO
 
 
+def obter_status_grupos_google(sistema):
+    """Texto da linha 'Retirada de Grupo de e-mails' no email, a partir do
+    resultado de inativar_email_google_workspace (campo grupos_status)."""
+    if sistema.get('status') != 'sucesso':
+        # so faz sentido falar em retirada de grupo se a conta foi suspensa
+        return STATUS_NAO_EXECUTADO
+
+    grupos_status = sistema.get('grupos_status')
+    total = sistema.get('grupos_total', 0)
+    removidos = sistema.get('grupos_removidos', 0)
+
+    if grupos_status == 'sem_grupos':
+        return "Não participava de nenhum grupo"
+    elif grupos_status == 'sucesso':
+        return "sucesso"
+    elif grupos_status == 'parcial':
+        return f"Parcial ({removidos}/{total} grupos removidos)"
+    elif grupos_status == 'erro':
+        return "Erro ao remover"
+
+    return STATUS_NAO_EXECUTADO
+
+
 def executar_sistema_rpa(sistema_id, email_usuario, cpf_usuario=None, nome_completo=None, acao='desativar'):
     """Executa o script RPA de um sistema específico."""
     config = SISTEMAS_CONFIG.get(sistema_id)
@@ -581,6 +604,7 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
     status = {
         'ad': ad_texto,
         'google': STATUS_NAO_EXECUTADO,
+        'google_grupos': STATUS_NAO_EXECUTADO,
         'jmj': STATUS_NAO_EXECUTADO,
         'saw': STATUS_NAO_EXECUTADO,
         'giu': STATUS_NAO_EXECUTADO,
@@ -601,6 +625,7 @@ def _obter_status_sistemas(resultado_ad, resultado_sistemas):
             status['jmj'] = obter_status_formatado(sistema)
         elif 'GOOGLE' in nome or 'WORKSPACE' in nome:
             status['google'] = obter_status_formatado(sistema)
+            status['google_grupos'] = obter_status_grupos_google(sistema)
         elif 'SAW' in nome:
             status['saw'] = obter_status_formatado(sistema)
         elif 'GIU' in nome:
@@ -680,6 +705,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
                 <table>
                     <tr><td>AD (Active Directory):</td><td>{status['ad']}</td></tr>
                     <tr><td>Google Workspace:</td><td>{status['google']}</td></tr>
+                    <tr><td>Retirada de Grupo de e-mails:</td><td>{status['google_grupos']}</td></tr>
                     <tr><td>CRM JMJ:</td><td>{status['jmj']}</td></tr>
                     <tr><td>SAW:</td><td>{status['saw']}</td></tr>
                     <tr><td>GIU Unimed:</td><td>{status['giu']}</td></tr>
@@ -792,7 +818,8 @@ def processar_demissao_async(dados, cpf):
         registrar_desligamento_csv(
             dados_colaborador=dados,
             cpf=cpf,
-            status_processamento=resultado_sistemas.get('status_geral', 'N/A')
+            status_processamento=resultado_sistemas.get('status_geral', 'N/A'),
+            detalhes_sistemas=resultado_sistemas.get('detalhes', []),
         )
 
         return {
@@ -844,7 +871,34 @@ def _desligamento_ja_registrado(cpf, data_demissao):
     return False
 
 
-def registrar_desligamento_csv(dados_colaborador, cpf, status_processamento='N/A'):
+def _migrar_csv_desligamentos_se_necessario(campos_esperados):
+    """Se o CSV ja existir com um cabecalho antigo (sem alguma coluna nova),
+    reescreve o arquivo preservando os dados e adicionando a(s) coluna(s)
+    faltante(s) vazias nas linhas antigas. Sem isso, uma coluna nova acrescentada
+    so no fim da linha (sem atualizar o cabecalho) faz o DictReader ler tudo
+    desalinhado dali pra frente."""
+    if not os.path.exists(DESLIGAMENTOS_CSV):
+        return
+
+    with open(DESLIGAMENTOS_CSV, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+        leitor = csv.DictReader(arquivo)
+        cabecalho_atual = leitor.fieldnames or []
+        linhas = list(leitor)
+
+    if set(campos_esperados) <= set(cabecalho_atual):
+        return  # ja esta atualizado, nada a fazer
+
+    with open(DESLIGAMENTOS_CSV, mode='w', encoding='utf-8-sig', newline='') as arquivo:
+        escritor = csv.DictWriter(arquivo, fieldnames=campos_esperados)
+        escritor.writeheader()
+        for linha in linhas:
+            escritor.writerow({campo: linha.get(campo, '') for campo in campos_esperados})
+
+    novas = set(campos_esperados) - set(cabecalho_atual)
+    logger.info(f"[CSV] Histórico de desligamentos migrado — novas colunas: {novas}")
+
+
+def registrar_desligamento_csv(dados_colaborador, cpf, status_processamento='N/A', detalhes_sistemas=None):
     """Registra histórico de desligamentos em CSV permanente (sem rotação)."""
     data_desligamento = dados_colaborador.get('data_demissao', '')
     if _desligamento_ja_registrado(cpf, data_desligamento):
@@ -860,6 +914,16 @@ def registrar_desligamento_csv(dados_colaborador, cpf, status_processamento='N/A
         'cargo',
         'data_desligamento',
         'status_processamento',
+        'detalhes_sistemas',
+    ]
+
+    _migrar_csv_desligamentos_se_necessario(campos)
+
+    # Guarda so o essencial de cada sistema (nome + status), para exibir no
+    # historico do card de detalhes do colaborador no dashboard.
+    sistemas_resumo = [
+        {'sistema': s.get('sistema', ''), 'status': s.get('status', '')}
+        for s in (detalhes_sistemas or [])
     ]
 
     linha = {
@@ -872,6 +936,7 @@ def registrar_desligamento_csv(dados_colaborador, cpf, status_processamento='N/A
         'cargo': dados_colaborador.get('cargo', {}).get('nome', ''),
         'data_desligamento': data_desligamento,
         'status_processamento': status_processamento,
+        'detalhes_sistemas': json.dumps(sistemas_resumo, ensure_ascii=False),
     }
 
     try:

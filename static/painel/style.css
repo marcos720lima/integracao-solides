@@ -387,6 +387,21 @@ table.tabela {
   font-size: 13px;
 }
 
+/* Tabela dentro de um espaço apertado (ex: modal): larguras fixas por coluna
+   e truncamento com reticências, para nunca estourar a largura e criar
+   barra de rolagem lateral. Usa com <td class="celula-truncada" title="...">
+   para mostrar o valor completo ao passar o mouse. */
+table.tabela-compacta {
+  table-layout: fixed;
+}
+
+.celula-truncada {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
 table.tabela th {
   text-align: left;
   font-size: 11px;
@@ -1286,6 +1301,7 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
   max-width: 560px;
   max-height: 88vh;
   overflow-y: auto;
+  overflow-x: hidden;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
 
