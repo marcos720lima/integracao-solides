@@ -23,6 +23,7 @@ from painel.ad_gestao import (
 from painel.auth_ad import ErroAutenticacao, autenticar_usuario
 from painel.exportacao import gerar_planilha_admissoes, gerar_planilha_desligamentos
 from painel.google_workspace import (
+    SKU_BUSINESS_STARTER,
     adicionar_membro_grupo,
     criar_grupo,
     criar_usuario_google,
@@ -32,9 +33,12 @@ from painel.google_workspace import (
     listar_membros_grupo,
     listar_unidades_organizacionais,
     listar_usuarios,
+    listar_usuarios_da_licenca,
+    obter_licenca_do_usuario,
     obter_status_google,
     obter_usuario_detalhado,
     remover_membro_grupo,
+    resumo_licencas,
 )
 from painel.infomed import InfomedConfigError, buscar_usuarios as infomed_buscar_usuarios
 from painel.infomed import corrigir_preferencias as infomed_corrigir_preferencias
@@ -132,6 +136,7 @@ def login():
         try:
             usuario = autenticar_usuario(login_usuario, senha)
             session.clear()
+            session.permanent = True
             session["usuario"] = usuario
             proximo = request.args.get("proximo")
             return redirect(proximo or url_for("painel.dashboard"))
@@ -555,7 +560,7 @@ def usuarios_ad():
 @login_obrigatorio
 def tela_google_workspace():
     aba = request.args.get("aba", "usuarios")
-    if aba not in ("usuarios", "grupos", "unidades"):
+    if aba not in ("usuarios", "grupos", "unidades", "licencas"):
         aba = "usuarios"
 
     q = request.args.get("q", "").strip()
@@ -565,11 +570,30 @@ def tela_google_workspace():
     grupo_selecionado = request.args.get("grupo", "").strip()
 
     erro = None
-    usuarios, grupos, unidades, membros_grupo = [], [], [], []
+    usuarios, grupos, unidades, membros_grupo, licencas = [], [], [], [], []
+    cards = {"total": None, "ativos": None, "suspensos": None, "business_starter_livre": None}
 
     try:
+        # Os cards do topo (total/ativos/suspensos) aparecem em qualquer aba,
+        # entao busca todos os usuarios uma vez so aqui - se a aba for
+        # "usuarios", reaproveita essa mesma lista pra aplicar o filtro,
+        # em vez de buscar de novo.
+        todos_usuarios = listar_usuarios(query=None)
+        cards["total"] = len(todos_usuarios)
+        cards["ativos"] = sum(1 for u in todos_usuarios if not u.get("suspenso"))
+        cards["suspensos"] = sum(1 for u in todos_usuarios if u.get("suspenso"))
+
+        try:
+            resumo_bs = next((r for r in resumo_licencas() if r["sku_id"] == SKU_BUSINESS_STARTER), None)
+            if resumo_bs:
+                cards["business_starter_livre"] = resumo_bs["livre"]
+        except Exception:
+            pass  # licenciamento indisponivel nao deve derrubar a tela toda
+
         if aba == "usuarios":
-            usuarios = listar_usuarios(query=q or None)
+            usuarios = todos_usuarios
+            if q:
+                usuarios = listar_usuarios(query=q)
             if status_filtro == "ativo":
                 usuarios = [u for u in usuarios if not u.get("suspenso")]
             elif status_filtro == "suspenso":
@@ -580,6 +604,8 @@ def tela_google_workspace():
                 membros_grupo = listar_membros_grupo(grupo_selecionado)
         elif aba == "unidades":
             unidades = listar_unidades_organizacionais()
+        elif aba == "licencas":
+            licencas = resumo_licencas()
     except GoogleAdminConfigError as e:
         erro = str(e)
     except Exception as e:
@@ -587,8 +613,8 @@ def tela_google_workspace():
 
     return render_template(
         "google_workspace.html",
-        aba=aba, q=q, status_filtro=status_filtro, erro=erro,
-        usuarios=usuarios, grupos=grupos, unidades=unidades,
+        aba=aba, q=q, status_filtro=status_filtro, erro=erro, cards=cards,
+        usuarios=usuarios, grupos=grupos, unidades=unidades, licencas=licencas,
         grupo_selecionado=grupo_selecionado, membros_grupo=membros_grupo,
     )
 
@@ -668,7 +694,26 @@ def api_google_detalhes_usuario(email):
         print(f"[Google] Falha ao consultar usuário {email}:\n{traceback.format_exc()}")
         detalhe = str(e) or f"{type(e).__name__} (sem mensagem — veja o log do servidor)"
         return jsonify({"erro": f"Falha ao consultar o usuário: {detalhe}"}), 502
+
+    try:
+        licenca = obter_licenca_do_usuario(email)
+        dados["licenca"] = licenca["sku_nome"] if licenca else None
+    except Exception:
+        dados["licenca"] = None  # licenciamento indisponivel nao deve quebrar a aba Geral
+
     return jsonify(dados)
+
+
+@painel_bp.route("/api/google-workspace/licencas/<sku_id>/usuarios")
+@login_obrigatorio
+def api_google_usuarios_da_licenca(sku_id):
+    try:
+        emails = listar_usuarios_da_licenca(sku_id)
+    except GoogleAdminConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao listar colaboradores da licença: {e}"}), 502
+    return jsonify({"emails": emails})
 
 
 @painel_bp.route("/api/google-workspace/usuario/<email>/grupos")
@@ -1061,6 +1106,22 @@ def colaboradores_novo_acesso():
         flash(f"Não foi possível validar o email no Google Workspace: {e}", "erro")
         return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
 
+    # Confere se ha licenca Business Starter livre antes de criar o email
+    # corporativo. So bloqueia quando o total e conhecido (Reseller API ou
+    # GOOGLE_LICENCAS_TOTAL no .env) e realmente esgotado (livre <= 0); se o
+    # total nao estiver configurado (livre = None), segue normalmente - nao
+    # da pra bloquear em cima de um numero que a gente nao tem.
+    licenca_disponivel = True
+    motivo_sem_licenca = None
+    try:
+        resumo_bs = next((r for r in resumo_licencas() if r["sku_id"] == SKU_BUSINESS_STARTER), None)
+        if resumo_bs and resumo_bs["livre"] is not None and resumo_bs["livre"] <= 0:
+            licenca_disponivel = False
+            motivo_sem_licenca = "Sem licença Google Workspace Business Starter livre no momento."
+    except Exception as e:
+        # falha ao consultar licenciamento nao deve travar a criacao de acesso
+        print(f"[Criar acesso] Aviso: não foi possível checar licenças disponíveis: {e}")
+
     partes_nome = nome_completo.split(" ", 1)
     primeiro_nome = partes_nome[0]
     sobrenome = partes_nome[1] if len(partes_nome) > 1 else primeiro_nome
@@ -1075,8 +1136,11 @@ def colaboradores_novo_acesso():
         resultado_ad = {"status": "erro", "mensagem": str(e), "senha": None}
 
     try:
-        criar_usuario_google(primeiro_nome, sobrenome, email, senha_google, cargo=cargo or None, departamento=setor or None, unidade_organizacional=ou_google or None)
-        resultado_google = {"status": "sucesso", "mensagem": "Usuário criado com sucesso no Google Workspace.", "senha": senha_google}
+        if not licenca_disponivel:
+            resultado_google = {"status": "pulado", "mensagem": motivo_sem_licenca + " O email corporativo não foi criado — apenas o acesso no Active Directory.", "senha": None}
+        else:
+            criar_usuario_google(primeiro_nome, sobrenome, email, senha_google, cargo=cargo or None, departamento=setor or None, unidade_organizacional=ou_google or None)
+            resultado_google = {"status": "sucesso", "mensagem": "Usuário criado com sucesso no Google Workspace.", "senha": senha_google}
     except Exception as e:
         resultado_google = {"status": "erro", "mensagem": str(e), "senha": None}
 

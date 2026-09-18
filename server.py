@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -236,6 +236,16 @@ if not _secret_key:
     logger.warning("[AVISO] SECRET_KEY não definida no .env - usando chave temporária (sessões do painel serão perdidas a cada reinício).")
     _secret_key = os.urandom(32)
 app.secret_key = _secret_key
+
+# Expira a sessão do painel por inatividade, em vez de depender só do cookie
+# sumir quando o navegador fechar (o Chrome/Edge com "continuar de onde
+# parei" restaura o cookie mesmo depois de reiniciar o PC). O tempo conta a
+# partir da ULTIMA requisicao (SESSION_REFRESH_EACH_REQUEST renova a cada
+# clique), entao só expira quem realmente ficou parado.
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=int(os.getenv('SESSAO_HORAS_EXPIRACAO', '8')))
+app.config['SESSION_REFRESH_EACH_REQUEST'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 from painel import painel_bp  # noqa: E402
 app.register_blueprint(painel_bp)
