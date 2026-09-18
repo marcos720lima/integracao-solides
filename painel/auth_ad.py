@@ -1,4 +1,4 @@
-from ldap3 import ALL, Connection, Server
+from ldap3 import NONE, Connection, Server
 from ldap3.utils.conv import escape_filter_chars
 
 DESCRICAO_LIBERADA = "TI"
@@ -19,12 +19,21 @@ def autenticar_usuario(login, senha):
     if not all([AD_URL, AD_USER, AD_PASS, BASE_DN]):
         raise ErroAutenticacao("Conexão com o Active Directory não está configurada (.env).")
 
-    servidor = Server(AD_URL, get_info=ALL, use_ssl=True)
+    # get_info=NONE (em vez de ALL): busca o schema inteiro do AD a cada
+    # login e nunca e usado aqui - so torna o login mais lento a toa.
+    # connect_timeout: falha rapido se o controlador de dominio estiver
+    # fora do ar, em vez de deixar o login travado esperando.
+    servidor = Server(AD_URL, get_info=NONE, use_ssl=True, connect_timeout=5)
 
-    conn_servico = Connection(
-        servidor, user=AD_USER, password=AD_PASS,
-        auto_bind=True, authentication="SIMPLE"
-    )
+    try:
+        conn_servico = Connection(
+            servidor, user=AD_USER, password=AD_PASS,
+            auto_bind=True, authentication="SIMPLE",
+            receive_timeout=8,
+        )
+    except Exception:
+        raise ErroAutenticacao("Não foi possível conectar ao Active Directory. Tente novamente em instantes.")
+
     try:
         login_sanitizado = escape_filter_chars(login)
         filtro = f"(&(objectClass=user)(sAMAccountName={login_sanitizado}))"
@@ -47,7 +56,8 @@ def autenticar_usuario(login, senha):
     try:
         conn_usuario = Connection(
             servidor, user=user_dn, password=senha,
-            auto_bind=True, authentication="SIMPLE"
+            auto_bind=True, authentication="SIMPLE",
+            receive_timeout=8,
         )
         conn_usuario.unbind()
     except Exception:
