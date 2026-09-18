@@ -38,7 +38,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **Active Directory** | Busca/filtra usuários do AD (nome, status, setor, OU), com paginação. Ao abrir um colaborador: aba **Geral** (edição de nome, email, setor, PIN de impressora e CPF), aba **Horários liberados** (logon hours, com botão de predefinir horário administrativo) e aba **Senha** (redefinir senha, bloquear/desbloquear conta). Cobre também contas sem CPF vinculado (antigas ou genéricas) que não aparecem em Colaboradores |
 | **GIU Unimed** | Consulta por CPF/CNPJ via API oficial — status, último acesso e aplicações/papéis vinculados, em segundos. Ativar/inativar aciona o RPA (ver nota acima) |
 | **NextQS** | Consulta por email via API oficial — nome, email e perfil, em segundos. Status e ativar/inativar acionam o RPA (ver nota acima) |
-| **Google Workspace** | Usuários, grupos de email (com membros) e unidades organizacionais. Cada usuário tem um botão de detalhes com aba **Geral** (nome, email, setor, cargo, unidade organizacional) e aba **Grupos de email** (grupos que participa, com opção de adicionar a outro grupo ou remover) |
+| **Google Workspace** | Cards no topo (usuários totais, ativos, suspensos, licenças Business Starter livres) sempre visíveis. Abas: Usuários, Grupos de email (com membros), Unidades organizacionais e **Licenças** (em uso/livre por SKU, com botão para listar os colaboradores de cada uma). Cada usuário tem um botão de detalhes com aba **Geral** (nome, email, setor, cargo, unidade organizacional, licença atual) e aba **Grupos de email** (grupos que participa, com opção de adicionar a outro grupo ou remover) |
 | **Infomed** | Busca direta no banco Oracle do Infomed: ativar/inativar usuário, editar dados (nome/email), gerenciar perfis vinculados, corrigir preferências (expiração de senha, tentativas de login) |
 | **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados. Só acessível pelo painel (não entra no fluxo automático) |
 | **Férias** | Consulta de férias no Tangerino (filtro por período/status) **e programação de desativação de acessos**: agenda início/fim das férias de um colaborador (manualmente ou a partir da lista do Tangerino), resolve automaticamente o email corporativo via AD pelo CPF (cai pro email pessoal do Tangerino se não achar), e escolhe quais sistemas pausar. Uma tarefa diária (7h) inativa quem entrou de férias e reativa quem voltou, sem intervenção manual |
@@ -231,10 +231,12 @@ Se quiser suspender automaticamente o email do colaborador demitido no Google Wo
    - `https://www.googleapis.com/auth/admin.directory.group` (grupos — criar/listar; usado pela tela de Grupos)
    - `https://www.googleapis.com/auth/admin.directory.group.member` (participação em grupos — adicionar/remover membro, inclusive a remoção automática de todos os grupos antes de suspender)
    - `https://www.googleapis.com/auth/admin.directory.orgunit.readonly` (unidades organizacionais - painel)
+   - `https://www.googleapis.com/auth/apps.licensing` (Enterprise License Manager API — aba Licenças e campo "Licença" no card do usuário)
+   - `https://www.googleapis.com/auth/apps.order.readonly` (Reseller API — total de licenças contratadas; só retorna dado se a assinatura for gerenciada por um revendedor, ver nota abaixo)
 
    String completa pra colar no campo "OAuth Scopes" do Admin Console:
    ```
-   https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/admin.directory.orgunit.readonly
+   https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/admin.directory.orgunit.readonly,https://www.googleapis.com/auth/apps.licensing,https://www.googleapis.com/auth/apps.order.readonly
    ```
 5. Configure no `.env`:
 
@@ -243,7 +245,14 @@ GOOGLE_ADMIN_ENABLED=true
 GOOGLE_SERVICE_ACCOUNT_FILE=C:\secure\google\service-account.json
 GOOGLE_DELEGATED_ADMIN=admin@empresa.com.br
 GOOGLE_WORKSPACE_DOMAIN=empresa.com.br
+# Total de licenças contratadas por SKU, usado quando a Reseller API não
+# retornar dado (assinatura comprada direto da Google, sem revenda — caso
+# mais comum). Formato: skuId:total,skuId:total. O skuId da Business
+# Starter é 1010020027 (ver painel/google_workspace.py para os demais).
+GOOGLE_LICENCAS_TOTAL=1010020027:150
 ```
+
+**Sobre a quantidade de licenças contratadas ("Livres" na aba Licenças):** o Google **não** expõe isso por API para quem compra o Workspace diretamente da Google (sem revendedor) — nem a Reports API, nem a Licensing API têm esse número, só a tela Billing → Subscriptions do Admin Console. A Reseller API tem, mas só funciona se a organização for cliente de um revendedor (parceiro autorizado) e a conta de serviço tiver autorização como tal — o mais provável é que **não** seja o caso, e a Reseller API simplesmente não retorne nada. Por isso o sistema tenta a Reseller API primeiro e, se ela não devolver o dado, usa o valor de `GOOGLE_LICENCAS_TOTAL` configurado manualmente. Sem nenhum dos dois, "Livres" mostra 0 — não significa que não há licença, só que o total contratado não está configurado.
 
 Regras aplicadas no fluxo de demissão:
 
