@@ -24,7 +24,10 @@
 
   <div class="card">
     <div class="rotulo" style="margin-bottom:10px;">Google Workspace</div>
-    <span class="badge badge-{{ 'sucesso' if resultado_google.status == 'sucesso' else 'erro' }}">{{ resultado_google.status }}</span>
+    {% set status_google = resultado_google.status %}
+    <span class="badge badge-{{ 'sucesso' if status_google == 'sucesso' else ('pendente' if status_google == 'pulado' else 'erro') }}">
+      {{ 'Não criado' if status_google == 'pulado' else status_google }}
+    </span>
     <p style="margin:10px 0 0; font-size:13px; color:var(--text-secondary);">{{ resultado_google.mensagem }}</p>
     {% if resultado_google.senha %}
     <div class="detalhe-rotulo" style="margin-top:14px;">Senha temporária (troca obrigatória no 1º login)</div>

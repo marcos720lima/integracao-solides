@@ -1,8 +1,10 @@
 import os
 
-from google_admin import GoogleAdminConfigError, obter_service_admin
+from google_admin import GoogleAdminConfigError, obter_service_admin, obter_service_licensing, obter_service_reseller
 
 LIMITE_PAGINAS_SEGURANCA = 25
+PRODUTO_WORKSPACE = "Google-Apps"
+SKU_BUSINESS_STARTER = "1010020027"
 
 
 def _sem_login_registrado(valor):
@@ -279,6 +281,145 @@ def obter_usuario_detalhado(email):
         "suspenso": bool(u.get("suspended")),
         "admin": bool(u.get("isAdmin")),
     }
+
+
+def listar_atribuicoes_de_licenca():
+    """Busca, de uma vez, todas as atribuicoes de licenca do Workspace
+    (qualquer SKU) via Enterprise License Manager API. A propria API ja
+    devolve o nome amigavel de cada SKU (skuName), entao nao precisa mapear
+    id -> nome na mao.
+
+    Diferente da Directory API (que aceita o atalho "my_customer"), a
+    Licensing API exige o dominio primario de verdade em customerId - por
+    isso usamos GOOGLE_WORKSPACE_DOMAIN aqui, e nao "my_customer".
+    """
+    service = obter_service_licensing()
+    dominio = os.getenv("GOOGLE_WORKSPACE_DOMAIN", "").strip()
+    if not dominio:
+        raise GoogleAdminConfigError(
+            "GOOGLE_WORKSPACE_DOMAIN não configurado — necessário para consultar licenças."
+        )
+
+    atribuicoes = []
+    page_token = None
+    paginas = 0
+
+    while True:
+        parametros = {"productId": PRODUTO_WORKSPACE, "customerId": dominio, "maxResults": 100}
+        if page_token:
+            parametros["pageToken"] = page_token
+        resposta = service.licenseAssignments().listForProduct(**parametros).execute()
+
+        for item in resposta.get("items", []):
+            atribuicoes.append({
+                "email": item.get("userId", ""),
+                "sku_id": item.get("skuId", ""),
+                "sku_nome": item.get("skuName", item.get("skuId", "")),
+            })
+
+        page_token = resposta.get("nextPageToken")
+        paginas += 1
+        if not page_token or paginas >= LIMITE_PAGINAS_SEGURANCA:
+            break
+
+    return atribuicoes
+
+
+def mapa_licenca_por_usuario():
+    """email -> {sku_id, sku_nome} - para mostrar a licenca de um usuario
+    especifico na aba Geral do card de detalhes, sem precisar de uma chamada
+    por usuario (usa o mesmo bulk fetch de listar_atribuicoes_de_licenca)."""
+    return {a["email"].lower(): a for a in listar_atribuicoes_de_licenca() if a.get("email")}
+
+
+def _total_configurado_manualmente(sku_id):
+    """Le GOOGLE_LICENCAS_TOTAL do .env, formato 'skuId:total,skuId:total'.
+    Usado quando a Reseller API nao estiver disponivel (assinatura nao e
+    gerenciada por revenda) - ver README para como preencher."""
+    bruto = os.getenv("GOOGLE_LICENCAS_TOTAL", "").strip()
+    for par in bruto.split(","):
+        par = par.strip()
+        if ":" not in par:
+            continue
+        sid, total = par.split(":", 1)
+        if sid.strip() == sku_id:
+            try:
+                return int(total.strip())
+            except ValueError:
+                return None
+    return None
+
+
+def _total_via_reseller(sku_id):
+    """Tenta a Reseller API para o total contratado. So funciona se a
+    assinatura da organizacao for gerenciada por um revendedor - caso
+    contrario a API retorna erro (403/404) e a funcao devolve None em vez de
+    propagar a excecao, para o chamador cair no valor manual."""
+    dominio = os.getenv("GOOGLE_WORKSPACE_DOMAIN", "").strip()
+    if not dominio:
+        return None
+    try:
+        service = obter_service_reseller()
+        resposta = service.subscriptions().list(customerId=dominio).execute()
+        for assinatura in resposta.get("subscriptions", []):
+            if assinatura.get("skuId") == sku_id:
+                seats = assinatura.get("seats", {})
+                total = seats.get("licensedNumberOfSeats") or seats.get("numberOfSeats")
+                if total is not None:
+                    return int(total)
+    except Exception:
+        return None
+    return None
+
+
+def resumo_licencas():
+    """Agrupa as atribuicoes por SKU (em uso, via API) e tenta descobrir o
+    total contratado (Reseller API, com fallback para GOOGLE_LICENCAS_TOTAL
+    no .env). 'livre' fica None quando o total nao e conhecido por nenhum
+    dos dois caminhos - mostrar como 'desconhecido', nunca inventar numero."""
+    atribuicoes = listar_atribuicoes_de_licenca()
+
+    por_sku = {}
+    for a in atribuicoes:
+        sid = a["sku_id"]
+        if sid not in por_sku:
+            por_sku[sid] = {"sku_id": sid, "sku_nome": a["sku_nome"], "em_uso": 0}
+        por_sku[sid]["em_uso"] += 1
+
+    resumo = []
+    origem_total = {}
+    for sid, dados in por_sku.items():
+        total = _total_via_reseller(sid)
+        origem = "reseller" if total is not None else None
+        if total is None:
+            total = _total_configurado_manualmente(sid)
+            origem = "manual" if total is not None else None
+
+        livre = (total - dados["em_uso"]) if total is not None else None
+        resumo.append({
+            "sku_id": sid,
+            "sku_nome": dados["sku_nome"],
+            "em_uso": dados["em_uso"],
+            "total": total,
+            "livre": livre,
+            "origem_total": origem,
+        })
+
+    resumo.sort(key=lambda r: r["sku_nome"])
+    return resumo
+
+
+def listar_usuarios_da_licenca(sku_id):
+    """Emails de quem tem uma SKU especifica atribuida - para o botao
+    'listar colaboradores' de cada licenca na aba Licencas."""
+    return sorted(a["email"] for a in listar_atribuicoes_de_licenca() if a["sku_id"] == sku_id)
+
+
+def obter_licenca_do_usuario(email):
+    """Licenca atual de um usuario especifico (ou None se nao tiver
+    nenhuma), para a aba Geral do card de detalhes."""
+    mapa = mapa_licenca_por_usuario()
+    return mapa.get((email or "").lower())
 
 
 def listar_unidades_organizacionais():

@@ -11,10 +11,30 @@
 <div class="aviso aviso-erro">{{ erro }}</div>
 {% endif %}
 
+<div class="cards-row">
+  <div class="card card-stat">
+    <div class="rotulo">Usuários</div>
+    <div class="valor">{{ cards.total if cards.total is not none else '—' }}</div>
+  </div>
+  <div class="card card-stat">
+    <div class="rotulo">Ativos</div>
+    <div class="valor">{{ cards.ativos if cards.ativos is not none else '—' }}</div>
+  </div>
+  <div class="card card-stat">
+    <div class="rotulo">Suspensos</div>
+    <div class="valor">{{ cards.suspensos if cards.suspensos is not none else '—' }}</div>
+  </div>
+  <div class="card card-stat">
+    <div class="rotulo">Business Starter livres</div>
+    <div class="valor">{{ cards.business_starter_livre if cards.business_starter_livre is not none else 0 }}</div>
+  </div>
+</div>
+
 <div class="abas">
   <a href="{{ url_for('painel.google_workspace', aba='usuarios') }}" class="aba {{ 'ativa' if aba == 'usuarios' }}">Usuários</a>
   <a href="{{ url_for('painel.google_workspace', aba='grupos') }}" class="aba {{ 'ativa' if aba == 'grupos' }}">Grupos de email</a>
   <a href="{{ url_for('painel.google_workspace', aba='unidades') }}" class="aba {{ 'ativa' if aba == 'unidades' }}">Unidades organizacionais</a>
+  <a href="{{ url_for('painel.google_workspace', aba='licencas') }}" class="aba {{ 'ativa' if aba == 'licencas' }}">Licenças</a>
 </div>
 
 <div class="card-panel">
@@ -113,7 +133,7 @@
     {% endif %}
 
     {% if not grupo_selecionado %}
-    <div style="margin-bottom:16px;">
+    <div style="padding:14px 20px; margin-bottom:16px;">
       <button type="button" class="btn btn-primario" onclick="alternarFormularioGrupo()">+ Criar grupo</button>
       <div id="form-criar-grupo" style="display:none; margin-top:12px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-sm);">
         <div class="form-grid">
@@ -186,7 +206,54 @@
     {% else %}
     {% if not erro %}<div class="estado-vazio">Nenhuma unidade organizacional encontrada.</div>{% endif %}
     {% endif %}
+  {% elif aba == 'licencas' %}
+    {% if licencas %}
+    <div style="overflow-x:auto;">
+      <table class="tabela">
+        <thead>
+          <tr><th>Licença</th><th>Em uso</th><th>Livres</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for l in licencas %}
+          <tr>
+            <td>{{ l.sku_nome }}</td>
+            <td class="mono">{{ l.em_uso }}</td>
+            <td>
+              {% if l.livre is not none %}
+              <span class="badge badge-{{ 'erro' if l.livre <= 0 else 'sucesso' }}">{{ l.livre }}</span>
+              {% else %}<span class="mono">0</span>{% endif %}
+            </td>
+            <td>
+              <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+                      onclick='abrirColaboradoresDaLicenca({{ l.sku_id|tojson }}, {{ l.sku_nome|tojson }})'>
+                Ver colaboradores
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {% if not erro %}<div class="estado-vazio">Nenhuma licença atribuída encontrada.</div>{% endif %}
+    {% endif %}
   {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal-licenca-usuarios" onclick="fecharColaboradoresDaLicencaFora(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="licenca-modal-nome">—</div>
+        <div class="modal-subtitulo">Colaboradores com esta licença</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharColaboradoresDaLicenca()">&times;</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div id="licenca-usuarios-carregando" style="font-size:13px; color:var(--text-secondary);">Carregando…</div>
+      <div id="licenca-usuarios-lista"></div>
+    </div>
+  </div>
 </div>
 
 <div class="modal-overlay" id="modal-google-usuario" onclick="fecharDetalheGoogleUsuarioFora(event)">
@@ -218,6 +285,7 @@
           <div class="detalhe-linha"><span class="detalhe-rotulo">Setor</span><span id="google-user-campo-setor">—</span></div>
           <div class="detalhe-linha"><span class="detalhe-rotulo">Cargo</span><span id="google-user-campo-cargo">—</span></div>
           <div class="detalhe-linha"><span class="detalhe-rotulo">Unidade organizacional</span><span id="google-user-campo-ou" class="mono">—</span></div>
+          <div class="detalhe-linha"><span class="detalhe-rotulo">Licença</span><span id="google-user-campo-licenca">—</span></div>
           <div class="detalhe-linha"><span class="detalhe-rotulo">Status</span><span id="google-user-campo-status">—</span></div>
         </div>
       </div>
@@ -362,6 +430,7 @@
       document.getElementById('google-user-campo-setor').textContent = json.setor || '—';
       document.getElementById('google-user-campo-cargo').textContent = json.cargo || '—';
       document.getElementById('google-user-campo-ou').textContent = json.unidade_organizacional || '—';
+      document.getElementById('google-user-campo-licenca').textContent = json.licenca || 'Sem licença atribuída';
       document.getElementById('google-user-campo-status').innerHTML =
         `<span class="badge badge-${json.suspenso ? 'erro' : 'sucesso'}">${json.suspenso ? 'Suspenso' : 'Ativo'}</span>`;
       carregando.style.display = 'none';
@@ -452,6 +521,46 @@
     } catch (e) {
       mostrarToast('Falha ao remover do grupo.', 'erro');
     }
+  }
+
+  // ---------- modal "colaboradores desta licença" ----------
+  function abrirColaboradoresDaLicenca(skuId, skuNome) {
+    document.getElementById('modal-licenca-usuarios').classList.add('aberto');
+    document.getElementById('licenca-modal-nome').textContent = skuNome;
+    const carregando = document.getElementById('licenca-usuarios-carregando');
+    const lista = document.getElementById('licenca-usuarios-lista');
+    carregando.style.display = 'block';
+    lista.innerHTML = '';
+
+    fetch(`/painel/api/google-workspace/licencas/${encodeURIComponent(skuId)}/usuarios`)
+      .then(r => r.json().then(json => ({ ok: r.ok, json })))
+      .then(({ ok, json }) => {
+        carregando.style.display = 'none';
+        if (!ok) {
+          lista.innerHTML = `<div class="aviso aviso-erro">${json.erro || 'Falha ao carregar.'}</div>`;
+          return;
+        }
+        const emails = json.emails || [];
+        if (!emails.length) {
+          lista.innerHTML = '<div class="estado-vazio">Nenhum colaborador com esta licença.</div>';
+          return;
+        }
+        lista.innerHTML = '<ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.9;">'
+          + emails.map(e => `<li class="mono">${e}</li>`).join('')
+          + '</ul>';
+      })
+      .catch(() => {
+        carregando.style.display = 'none';
+        lista.innerHTML = '<div class="aviso aviso-erro">Falha ao carregar colaboradores.</div>';
+      });
+  }
+
+  function fecharColaboradoresDaLicenca() {
+    document.getElementById('modal-licenca-usuarios').classList.remove('aberto');
+  }
+
+  function fecharColaboradoresDaLicencaFora(evento) {
+    if (evento.target.id === 'modal-licenca-usuarios') fecharColaboradoresDaLicenca();
   }
 </script>
 {% endblock %}

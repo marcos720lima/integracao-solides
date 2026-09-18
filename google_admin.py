@@ -5,6 +5,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/admin.directory.group",
     "https://www.googleapis.com/auth/admin.directory.group.member",
     "https://www.googleapis.com/auth/admin.directory.orgunit.readonly",
+    "https://www.googleapis.com/auth/apps.licensing",
+    "https://www.googleapis.com/auth/apps.order.readonly",
 ]
 
 
@@ -33,6 +35,38 @@ def obter_service_admin():
     creds = service_account.Credentials.from_service_account_file(service_account_file, scopes=SCOPES)
     creds = creds.with_subject(delegated_admin)
     return build("admin", "directory_v1", credentials=creds, cache_discovery=False)
+
+
+def _obter_credenciais():
+    """Credenciais delegadas compartilhadas pelas APIs do Google Admin
+    (Directory, Licensing, Reseller) - mesmo arquivo, mesmos escopos."""
+    service_account_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+    delegated_admin = os.getenv("GOOGLE_DELEGATED_ADMIN", "").strip()
+
+    if not service_account_file:
+        raise GoogleAdminConfigError("GOOGLE_SERVICE_ACCOUNT_FILE não configurado")
+    if not os.path.exists(service_account_file):
+        raise GoogleAdminConfigError(f"JSON não encontrado: {service_account_file}")
+    if not delegated_admin:
+        raise GoogleAdminConfigError("GOOGLE_DELEGATED_ADMIN não configurado")
+
+    from google.oauth2 import service_account
+    creds = service_account.Credentials.from_service_account_file(service_account_file, scopes=SCOPES)
+    return creds.with_subject(delegated_admin)
+
+
+def obter_service_licensing():
+    """Enterprise License Manager API - quem está usando qual licença."""
+    from googleapiclient.discovery import build
+    return build("licensing", "v1", credentials=_obter_credenciais(), cache_discovery=False)
+
+
+def obter_service_reseller():
+    """Reseller API - quantidade total contratada (só funciona se a
+    assinatura for gerenciada por um revendedor; ver GOOGLE_LICENCAS_TOTAL
+    no .env para o caminho manual quando não for)."""
+    from googleapiclient.discovery import build
+    return build("reseller", "v1", credentials=_obter_credenciais(), cache_discovery=False)
 
 
 def inativar_email_google_workspace(email: str | None) -> dict:
