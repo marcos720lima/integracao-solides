@@ -1,5 +1,6 @@
 """RPA GIU Unimed - Ativa/Desativa usuarios no GIU."""
 
+import re
 import sys
 import time
 import os
@@ -372,6 +373,74 @@ def _erro_navegador_fechado(exc):
     return "Target page, context or browser has been closed" in msg or "TargetClosedError" in msg
 
 
+def _aguardar_carregamento(page, timeout_s=90):
+    """Espera o spinner "Carregando dados..." do GIU sumir.
+
+    Retorna True quando nao ha spinner visivel, False se estourar o tempo.
+    """
+    spinner = page.locator(".vue-simple-spinner-text", has_text="Carregando dados")
+    fim = time.time() + timeout_s
+    while time.time() < fim:
+        try:
+            visivel = any(spinner.nth(i).is_visible() for i in range(spinner.count()))
+            if not visivel:
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
+def _ler_status_inativo(page):
+    """Le o status da conta na tela de edicao do GIU.
+
+    O rotulo do status e um <span class="... label-campo verdadeiro"> ATIVA </span>
+    (ou "falso" quando INATIVA). Retorna True = INATIVA, False = ATIVA,
+    None = nao conseguiu ler.
+    """
+    try:
+        label = page.locator("span.label-campo.verdadeiro, span.label-campo.falso").first
+        label.wait_for(state="visible", timeout=8000)
+        classe = (label.get_attribute("class") or "").lower()
+        texto = (label.inner_text() or "").strip().upper()
+    except Exception:
+        return None
+    # INATIV e checado primeiro, porque "ATIVA" esta contido em "INATIVA"
+    if "falso" in classe or texto.startswith("INATIV"):
+        return True
+    if "verdadeiro" in classe or texto.startswith("ATIV"):
+        return False
+    return None
+
+
+def _alternar_toggle(page, estado_antes):
+    """Clica no toggle (span.slider.round) e CONFIRMA que o status mudou.
+
+    Tenta 3 jeitos de clicar e para assim que o status mudar. Se nao
+    conseguir reler o status, para imediatamente para nao clicar de novo
+    e desfazer a alteracao.
+    """
+    metodos = [
+        ("clique normal", lambda: page.locator("span.slider.round:visible").first.click(timeout=5000)),
+        ("clique forcado", lambda: page.locator("span.slider.round:visible").first.click(timeout=5000, force=True)),
+        ("clique via JS", lambda: page.evaluate("document.querySelector('span.slider.round')?.click()")),
+    ]
+    for nome, acao_clique in metodos:
+        try:
+            acao_clique()
+        except Exception as exc:
+            print(f"[GIU] Toggle ({nome}) deu erro: {exc}", file=sys.stderr)
+        time.sleep(1.5)
+        depois = _ler_status_inativo(page)
+        if depois is None:
+            return False
+        if depois != estado_antes:
+            print(f"[GIU] Toggle alterado com sucesso ({nome}).", file=sys.stderr)
+            return True
+        print(f"[GIU] Toggle ({nome}) nao mudou o status, tentando outro jeito...", file=sys.stderr)
+    return False
+
+
 def executar_giu_automatico(cpf_usuario, acao='desativar'):
     acao_normalizada = ACOES_VALIDAS.get((acao or '').lower())
     if acao_normalizada is None:
@@ -534,6 +603,12 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
                           file=sys.stderr)
                     return ERRO
 
+                # espera a lista inicial terminar de carregar antes de buscar
+                if not _aguardar_carregamento(page):
+                    _capturar_diagnostico(page, "carregando_lista")
+                    print("[GIU] Lista de usuarios nao terminou de carregar.", file=sys.stderr)
+                    return ERRO
+
                 campo_busca.fill(cpf_usuario)
                 time.sleep(1)
 
@@ -552,30 +627,44 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
                     campo_busca.press("Enter")
                 time.sleep(3)
 
-                try:
-                    page.locator(
-                        ".loading, .spinner, .v-overlay, .overlay, [class*='loading'], [class*='spinner']"
-                    ).first.wait_for(state="hidden", timeout=5000)
-                except Exception:
-                    pass
+                # espera o resultado da busca carregar de verdade (via ZenRows
+                # pode levar bem mais que 5s). Se nao carregar, e ERRO, e nao
+                # "nao encontrado", pra nao mascarar lentidao como usuario inexistente.
+                if not _aguardar_carregamento(page):
+                    _capturar_diagnostico(page, "carregando_busca")
+                    print("[GIU] Resultado da busca nao terminou de carregar.", file=sys.stderr)
+                    return ERRO
+                time.sleep(1)
 
+                # ---------- 1) acha a linha do CPF certo no resultado ----------
+                # So clica em "editar" na linha que contem o CPF buscado, para
+                # nunca abrir o cadastro de outra pessoa.
+                cpf_digitos = re.sub(r"\D", "", cpf_usuario)
+                linhas = page.locator("tbody tr")
+                linha_alvo = None
                 try:
-                    icone_editar = page.locator(
-                        "tbody div.icone-acao.habilitado, "
-                        "td div.icone-acao.habilitado, "
-                        "div.icone-acao.habilitado, "
-                        "[class*='icone-acao'][class*='habilitado']"
-                    )
-                    if icone_editar.count() == 0:
-                        # pode ser que a interface abra o cadastro ao clicar na
-                        # propria linha do resultado; captura para inspecao.
-                        _capturar_diagnostico(page, "resultado_busca")
-                        return NAO_ENCONTRADO
+                    for i in range(linhas.count()):
+                        texto_linha = re.sub(r"\D", "", linhas.nth(i).inner_text() or "")
+                        if cpf_digitos and cpf_digitos in texto_linha:
+                            linha_alvo = linhas.nth(i)
+                            break
                 except Exception:
+                    linha_alvo = None
+
+                if linha_alvo is None:
                     _capturar_diagnostico(page, "resultado_busca")
+                    print(f"[GIU] CPF final {cpf_digitos[-2:]} nao aparece no resultado da busca.", file=sys.stderr)
                     return NAO_ENCONTRADO
 
-                alvo = icone_editar.first
+                alvo = linha_alvo.locator(
+                    "div.icone-acao.habilitado, [class*='icone-acao'][class*='habilitado']"
+                ).first
+                if alvo.count() == 0:
+                    _capturar_diagnostico(page, "resultado_busca")
+                    print("[GIU] Linha do CPF encontrada, mas sem icone de editar.", file=sys.stderr)
+                    return ERRO
+
+                # ---------- 2) abre o cadastro ----------
                 try:
                     alvo.scroll_into_view_if_needed(timeout=5000)
                 except Exception:
@@ -603,38 +692,22 @@ def executar_giu_automatico(cpf_usuario, acao='desativar'):
                         pass
                     time.sleep(1)
 
-                # Le o estado atual. O rotulo do toggle tem classe "verdadeiro"
-                # (ATIVA) ou "falso" (INATIVA), mais confiavel que so o texto.
-                inativo = None
-                try:
-                    label_status = page.locator("span.label-campo").first
-                    classe = (label_status.get_attribute("class") or "").lower()
-                    texto = (label_status.inner_text() or "").strip().upper()
-                    if "verdadeiro" in classe or "ATIVA" in texto or "ATIVO" in texto:
-                        inativo = False
-                    elif "falso" in classe or "INATIVA" in texto or "INATIVO" in texto:
-                        inativo = True
-                except Exception:
-                    inativo = None
+                # ---------- 3) le o status; se nao souber, NAO mexe ----------
+                inativo = _ler_status_inativo(page)
+                if inativo is None:
+                    _capturar_diagnostico(page, "status")
+                    print("[GIU] Nao consegui ler o status da conta; nada foi alterado.", file=sys.stderr)
+                    return ERRO
 
-                if inativo is not None:
-                    if acao == 'bloquear' and inativo:
-                        return JA_NO_ESTADO_DESEJADO
-                    if acao == 'desbloquear' and not inativo:
-                        return JA_NO_ESTADO_DESEJADO
+                if acao == 'bloquear' and inativo:
+                    return JA_NO_ESTADO_DESEJADO
+                if acao == 'desbloquear' and not inativo:
+                    return JA_NO_ESTADO_DESEJADO
 
-                try:
-                    toggle = _first_visible(
-                        page,
-                        ["span.slider.round", "label.switch", "input[type='checkbox']"],
-                        timeout=4000,
-                    )
-                    if not toggle:
-                        print("[GIU] Toggle de ativação não encontrado.", file=sys.stderr)
-                        return ERRO
-                    toggle.click()
-                except Exception:
-                    print("[GIU] Falha ao clicar no toggle de ativação.", file=sys.stderr)
+                # ---------- 4) clica no toggle e confirma a mudanca ----------
+                if not _alternar_toggle(page, inativo):
+                    _capturar_diagnostico(page, "toggle")
+                    print("[GIU] Nao consegui alterar o toggle de ativacao.", file=sys.stderr)
                     return ERRO
 
                 time.sleep(2)
