@@ -22,7 +22,7 @@ Quando o Solides envia o webhook de demissão, o sistema:
 
 > **GIU e NextQS usam arquitetura híbrida (API oficial + RPA):** a consulta de dados/status é feita pela API oficial de cada sistema (instantânea). Nenhuma das duas expõe endpoint de ativação/inativação hoje — por isso essa ação segue via RPA (Playwright). As telas de login de ambos usam Cloudflare Turnstile, que bloqueia automação de navegador comum; o RPA contorna isso conectando num navegador remoto (ZenRows Scraping Browser), autorizado pela Unimed do Brasil no caso do GIU. Ver `painel/giu_api.py` / `rpa_giu.py` e `painel/nextqs_api.py` / `rpa_nextqs.py`.
 >
-> **Pirâmide fica de fora do fluxo automático de propósito** — inativar pode travar processos abertos que dependem do usuário ativo até serem finalizados. É usada só pela tela de Ativação/Inativação manual. Ver a seção [Sistemas Integrados](#sistemas-integrados).
+> **Pirâmide fica de fora do fluxo automático, da ativação/inativação manual e da aba Sistemas de propósito** — inativar pode travar processos abertos que dependem do usuário ativo, e o mesmo e-mail pode estar em mais de um login. É gerenciada só pela tela própria do painel, via API oficial Pirâmide 360. Ver [Integração Pirâmide](#5-integração-pirâmide-api-pirâmide-360).
 >
 > **B+ Reembolso (`rpa_bplus.py`) existe no repositório mas não está ligado a nenhum fluxo** (nem automático, nem manual) — o script foi escrito mas nunca chegou a ser registrado no `SISTEMAS_CONFIG` do `server.py`. Se for pra usar, precisa ser adicionado lá.
 
@@ -40,7 +40,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **NextQS** | Consulta por email via API oficial — nome, email e perfil, em segundos. Status e ativar/inativar acionam o RPA (ver nota acima) |
 | **Google Workspace** | Cards no topo (usuários totais, ativos, suspensos, licenças Business Starter livres) sempre visíveis. Abas: Usuários, Grupos de email (com membros), Unidades organizacionais e **Licenças** (em uso/livre por SKU, com botão para listar os colaboradores de cada uma). Cada usuário tem um botão de detalhes com aba **Geral** (nome, email, setor, cargo, unidade organizacional, licença atual) e aba **Grupos de email** (grupos que participa, com opção de adicionar a outro grupo ou remover) |
 | **Infomed** | Busca direta no banco Oracle do Infomed: ativar/inativar usuário, editar dados (nome/email), gerenciar perfis vinculados, corrigir preferências (expiração de senha, tentativas de login) |
-| **Pirâmide** | Mesmo padrão do Infomed — busca direta no banco Oracle: ativar/inativar usuário, editar dados. Só acessível pelo painel (não entra no fluxo automático) |
+| **Pirâmide** | Via API oficial Pirâmide 360 (sem banco): pesquisa por nome/login/e-mail, ativar/inativar, redefinir senha (automática ou definida) e **novo acesso completo** em 3 passos — colaborador no Financeiro (próxima matrícula da filial), login no Administrador, Identificação Filial (SOLICITANTE) e empresas liberadas. Não entra no fluxo automático nem na ativação/inativação manual |
 | **Férias** | Consulta de férias no Tangerino (filtro por período/status) **e programação de desativação de acessos**: agenda início/fim das férias de um colaborador (manualmente ou a partir da lista do Tangerino), resolve automaticamente o email corporativo via AD pelo CPF (cai pro email pessoal do Tangerino se não achar), e escolhe quais sistemas pausar. Uma tarefa diária (7h) inativa quem entrou de férias e reativa quem voltou, sem intervenção manual |
 | **Ativação/Inativação manual** | Alternativa manual ao webhook — toggle Ativar/Inativar, escolhe entre os 10 sistemas integrados, dispara em paralelo. Usado tanto em contingência (webhook falhou) quanto pra reverter uma inativação feita por engano |
 | **Webhooks** | Inspeciona webhooks recebidos, reprocessa manualmente |
@@ -56,6 +56,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **LDAP3** | 2.9.1 | Conexão com Active Directory |
 | **Playwright** | 1.40.0+ | Automação de navegador (RPA) |
 | **oracledb** | - | Conexão direta com o banco Oracle do Infomed |
+| **zeep** | - | Cliente SOAP da API Pirâmide 360 |
 | **python-dotenv** | 1.0.0 | Gerenciamento de variáveis de ambiente |
 | **Requests** | 2.32.5 | Cliente HTTP |
 | **Waitress** | 3.0.0 | Servidor WSGI de produção |
@@ -68,7 +69,8 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 - **Integração AD:** Protocolo LDAP sobre SSL (LDAPS)
 - **Integração GIU:** API REST oficial da Unimed do Brasil para consulta (`painel/giu_api.py`); ativação/inativação via RPA (Playwright + ZenRows Scraping Browser, que resolve o desafio Cloudflare Turnstile)
 - **Integração NextQS:** API REST oficial para consulta (`painel/nextqs_api.py`); ativação/inativação via RPA (Playwright + ZenRows)
-- **Integração Infomed e Pirâmide:** Conexão direta aos respectivos bancos Oracle (via `oracledb`, sem passar pela interface do sistema)
+- **Integração Infomed:** Conexão direta ao banco Oracle (via `oracledb`, sem passar pela interface do sistema)
+- **Integração Pirâmide:** API oficial Pirâmide 360 da MV (SOAP/ASMX: `wsSystem`, `wsUSUARIO`, `wsCOLABORADOR`, `wsUSUARIO_EMPRESA`, `wsPERFIL`) — `painel/piramide_api.py` + `painel/piramide.py`
 - **RPA:** Playwright com Chromium (CRM, SAW, GED, Tasy, e GIU/NextQS quando a API não cobre a ação)
 - **Agendamento:** Tarefa diária (Agendador de Tarefas do Windows, 7h) para a programação de férias — ver `tarefa_ferias.py`
 - **Webhooks:** Recebimento de eventos do Solides
@@ -80,7 +82,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 Solides → Webhook → ngrok → Servidor Local → AD + Google Workspace + CRM + SAW + GIU + GED + Tasy + Infomed + NextQS + Email
 ```
 
-> B+ Reembolso não faz parte do fluxo atualmente (ver observação acima). Pirâmide fica de fora do fluxo automático por decisão de negócio, mas está disponível na ativação/inativação manual.
+> B+ Reembolso não faz parte do fluxo atualmente (ver observação acima). Pirâmide fica de fora de todos os fluxos (automático e manual) por decisão de negócio — só pela tela própria do painel.
 
 ## Instalação (ambiente local ou VM)
 
@@ -357,8 +359,10 @@ iniciar_servidor_vm.bat
 
 Esse script:
 
-- Abre uma janela com o servidor (Waitress) em `http://localhost:3000`
-- Abre outra janela com `ngrok http 3000`
+- Abre uma janela com o servidor (Waitress) em `http://localhost:3000` — **só se ainda não houver um rodando**
+- Abre outra janela com `ngrok http 3000` — **só se ainda não houver um rodando**
+
+Ele confere antes de abrir porque as janelas são abertas com `start` e continuam vivas mesmo depois que a tarefa agendada é finalizada; sem essa checagem, cada nova execução empilhava um servidor a mais na porta 3000 (e o que respondia era sempre o mais antigo, com o código desatualizado).
 
 Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para configurar o webhook no Solides:
 
@@ -371,12 +375,19 @@ Use a URL pública mostrada pelo ngrok (ex.: `https://xxxx.ngrok-free.app`) para
 
 Em produção, o `.bat` não é executado manualmente — uma **Tarefa Agendada do Windows** (`Integração Solides - server`) dispara o `iniciar_servidor_vm.bat` sozinha, com dois gatilhos: no logon do usuário configurado e também `AtStartup` (assim o servidor sobe mesmo que a VM reinicie sem login automático). A tarefa roda com `LogonType Password` (credencial armazenada de forma segura pelo Windows, sem expor senha em texto claro no Registro).
 
-> **Nunca rode `iniciar_servidor_vm.bat` manualmente enquanto essa tarefa existir** — isso abre um segundo processo de ngrok, e contas gratuitas só permitem uma sessão de túnel simultânea (a segunda tentativa falha com `ERR_NGROK_108`). Pra reiniciar o servidor, use a própria tarefa:
-> ```powershell
-> Restart-ScheduledTask -TaskName "Integração Solides - server"
-> # ou
-> schtasks /run /tn "Integração Solides - server"
-> ```
+Configuração da tarefa: **"Se a tarefa já estiver sendo executada: Não iniciar uma nova instância"**.
+
+**Pra reiniciar o servidor (ex.: depois de atualizar arquivos), use o `reiniciar_servidor.bat` — botão direito → Executar como administrador.** Ele:
+
+1. finaliza a tarefa agendada;
+2. encerra **todos** os processos `python ... waitress` (sem mexer em outros scripts Python) e confere que não sobrou nenhum;
+3. encerra o ngrok;
+4. executa a tarefa de novo;
+5. mostra quantos processos subiram (o normal é **2** do servidor — venv + python — e **1** do ngrok).
+
+> Só "Finalizar" a tarefa no Agendador **não** basta: o servidor e o ngrok continuam abertos. Enquanto o ngrok estiver fechado, os webhooks do Solides não chegam — por isso o `.bat` faz tudo em sequência.
+>
+> Pra conferir à mão: `wmic process where "name='python.exe' and CommandLine like '%waitress%'" get ProcessId` (2 linhas) e `tasklist | findstr ngrok` (1 linha). Painel do ngrok: `http://127.0.0.1:4040`.
 
 Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo dia às 7h (ver seção [Painel Web](#painel-web) → Férias).
 
@@ -392,10 +403,13 @@ Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo
 ├── rpa_ged.py                # RPA - GED Bye Bye Paper (email)
 ├── rpa_tasy.py               # RPA - Tasy EMR (nome completo + nome de conta)
 ├── rpa_infomed.py            # Ativa/inativa no Infomed via banco Oracle (email)
-├── rpa_piramide.py           # Ativa/inativa na Pirâmide via banco Oracle (email) - só manual
+├── rpa_piramide.py           # Ativa/inativa na Pirâmide via API (email) - fora de todos os fluxos, mantido por compatibilidade
+├── teste_piramide_api.py     # Diagnóstico da API Pirâmide 360 (modos auth, campos, empresas, etc.) - homologação
 ├── rpa_nextqs.py             # RPA - NextQS Manager (status/ativar/inativar, via ZenRows)
 ├── rpa_bplus.py              # RPA - B+ Reembolso (não ligado a nenhum fluxo)
 ├── tarefa_ferias.py          # Tarefa diária (7h) que aplica os agendamentos de férias
+├── iniciar_servidor_vm.bat   # Sobe servidor + ngrok (chamado pela Tarefa Agendada; não duplica)
+├── reiniciar_servidor.bat    # Reinicia de verdade: encerra servidor/ngrok e roda a tarefa de novo
 ├── inspecionar_pagina.py    # Ferramenta para mapear novos sites
 ├── painel/                   # Blueprint Flask do painel web
 │   ├── __init__.py            # Rotas
@@ -406,7 +420,8 @@ Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo
 │   ├── giu_api.py                # Cliente da API oficial do GIU (consulta)
 │   ├── nextqs_api.py             # Cliente da API oficial do NextQS (consulta)
 │   ├── infomed.py                # Conexão Oracle direta com o Infomed
-│   ├── piramide.py               # Conexão Oracle direta com a Pirâmide
+│   ├── piramide.py               # Regras da tela Pirâmide (pesquisa, status, senha, novo acesso, índice de e-mails)
+│   ├── piramide_api.py           # Cliente da API Pirâmide 360 (token, SOAP, log de escrita)
 │   ├── agendamento_ferias.py    # Armazenamento/estado dos agendamentos de férias
 │   ├── jobs.py                    # Job em background da ativação/inativação manual
 │   ├── rpa_status_jobs.py        # Job em background da consulta de status (aba Sistemas)
@@ -417,8 +432,9 @@ Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo
 ├── static/painel/             # CSS/estáticos do painel
 ├── logs/                      # Pasta de logs (criada automaticamente)
 │   ├── integracao_solides.log  # Log geral
-│   └── webhooks.log            # Log de webhooks
-├── data/                       # CSV de histórico de desligamentos, agendamentos_ferias.json
+│   ├── webhooks.log            # Log de webhooks
+│   └── piramide_api.log        # Toda escrita feita na Pirâmide (quem, o quê, ambiente — sem senhas)
+├── data/                       # CSV de histórico de desligamentos, agendamentos_ferias.json, piramide_emails_*.json (índice)
 ├── env.example                # Template de variáveis
 ├── requirements.txt           # Dependências Python
 └── README.md                  # Este arquivo
@@ -432,7 +448,7 @@ Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo
 | `/webhook/solides` | POST | Recebe webhook de demissão |
 | `/consulta-ad` | POST | Consulta usuário no AD |
 | `/sistemas/status` | GET | Status dos sistemas RPA |
-| `/painel/*` | GET/POST | Painel web (login, dashboard, colaboradores, AD, Google Workspace, Infomed, férias, ativação/inativação manual, webhooks, logs) — ver `painel/__init__.py` para a lista completa de rotas |
+| `/painel/*` | GET/POST | Painel web (login, dashboard, colaboradores, AD, Google Workspace, Infomed, Pirâmide, férias, ativação/inativação manual, webhooks, logs) — ver `painel/__init__.py` para a lista completa de rotas |
 
 ## Sistemas Integrados
 
@@ -446,7 +462,7 @@ Uma segunda tarefa, **`Rotina Férias - Acessos`**, roda `tarefa_ferias.py` todo
 | GED Bye Bye Paper | — | RPA (`rpa_ged.py`) | Email | ✅ | ✅ |
 | Tasy EMR | — | RPA (`rpa_tasy.py`) | Nome completo + nome de conta | ✅ | ✅ |
 | Infomed | Oracle direto (`painel/infomed.py`) | Oracle direto / RPA (`rpa_infomed.py`) | Email corporativo | ✅ | ✅ |
-| Pirâmide | Oracle direto (`painel/piramide.py`) | Oracle direto / RPA (`rpa_piramide.py`) | Email corporativo | ❌ (decisão de negócio, ver nota acima) | ✅ |
+| Pirâmide | API Pirâmide 360 (`painel/piramide.py`) | API Pirâmide 360 (tela própria) | Login (e-mail via índice) | ❌ (decisão de negócio) | Só na tela Pirâmide |
 | NextQS Manager | API oficial (`painel/nextqs_api.py`) | RPA + ZenRows (`rpa_nextqs.py`) | Email | ✅ | ✅ |
 | B+ Reembolso | — | RPA (`rpa_bplus.py`) | Nome de conta | ❌ (nunca foi ligado) | ❌ |
 
@@ -485,7 +501,7 @@ python inativar_manual.py --cpf 01234567890 --email joao.silva@empresa.com.br --
 
 # Apenas sistemas específicos
 python inativar_manual.py --cpf 01234567890 --sistemas giu
-python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw ged infomed piramide nextqs google
+python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw ged infomed
 ```
 
 ### Parâmetros disponíveis
@@ -495,7 +511,7 @@ python inativar_manual.py --email joao.silva@empresa.com.br --sistemas crm saw g
 | `--cpf` | CPF do colaborador (usado no AD e GIU) |
 | `--email` | Email corporativo (usado nos demais sistemas) |
 | `--nome` | Nome completo (necessário para Tasy) |
-| `--sistemas` | Lista de sistemas: `ad`, `crm`, `saw`, `giu`, `ged`, `tasy`, `infomed`, `piramide`, `nextqs`, `google` |
+| `--sistemas` | Lista de sistemas: `ad`, `crm`, `saw`, `giu`, `ged`, `tasy`, `infomed` (Pirâmide não entra — usar a tela própria) |
 | `--acao` | `ativar` ou `desativar` (padrão: `desativar`) |
 | `--pular-ad` | Não tentar mexer no Active Directory |
 | `--enviar-email` | Enviar email de notificação para o TI |
@@ -587,6 +603,24 @@ Senha do usuário do banco Oracle em formato antigo (pré-12c), que o modo "thin
 
 Falha de DNS/rede — a máquina onde o painel roda não consegue resolver o hostname configurado. Confirme se está usando o nome/IP corretos (ex.: via `tnsnames.ora` ou `SYS_CONTEXT('USERENV','SERVER_HOST')` no próprio banco) e se há rota de rede até lá (`Test-NetConnection -ComputerName HOST -Port 1521` no PowerShell).
 
+### Atualizei os arquivos mas o painel continua igual
+
+Quase sempre é **mais de um servidor rodando** na porta 3000 — o mais antigo continua respondendo com o código velho. Rode o `reiniciar_servidor.bat` como administrador e confira que ficaram só 2 processos do servidor.
+
+### Pirâmide: "Token inativo"
+
+A API aceita um token por login: se outro programa (ou alguém no Pirâmide) autenticar com o mesmo login do painel, o token do painel cai. O painel reautentica sozinho e repete a chamada; se ficar frequente, use um login exclusivo pro painel em `PIRAMIDE_API_LOGIN`.
+
+### Pirâmide: `OutOfMemoryException` / `-100: Não foi possível acessar o banco`
+
+Erros do próprio servidor da API (MV). O `OutOfMemory` no `Incluir` o painel tenta de novo sozinho; o `-100` costuma aparecer quando a base de homologação está fora do ar (ela só abre a partir das 10h).
+
+### Pirâmide: o que a API não faz
+
+- **Editar** nome/e-mail/filial de usuário existente: o `Alterar` exige mandar a senha junto — fazer direto no Pirâmide (ou usar "Redefinir senha", que preserva os vínculos).
+- **Buscar por e-mail** direto: não existe filtro; o painel usa um índice montado pela API (`data/piramide_emails_*.json`, botão "atualizar" na tela, ~9 min). Usuário criado fora do painel entra no índice na próxima atualização incremental.
+- **E-mail repetido**: o mesmo e-mail pode estar em vários logins — a busca mostra todos.
+
 ### Terminal trava, só volta ao apertar Enter
 
 É o **QuickEdit Mode** do console do Windows (ver seção de execução em VM acima).
@@ -594,4 +628,4 @@ Falha de DNS/rede — a máquina onde o painel roda não consegue resolver o hos
 ---
 
 **Desenvolvido por:** Marcos Vinicius Viana Lima
-**Versão:** 4.0
+**Versão:** 4.1
