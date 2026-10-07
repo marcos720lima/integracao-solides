@@ -4,7 +4,7 @@ import uuid
 jobs_status_sistemas = {}
 jobs_status_lock = threading.Lock()
 
-SISTEMAS_RPA = ["crm", "saw", "giu", "ged", "tasy", "infomed", "piramide"]
+SISTEMAS_RPA = ["crm", "saw", "giu", "ged", "tasy", "infomed"]
 
 NOMES_SISTEMAS = {
     "crm": "CRM JMJ",
@@ -13,7 +13,6 @@ NOMES_SISTEMAS = {
     "ged": "GED Bye Bye Paper",
     "tasy": "Tasy EMR",
     "infomed": "Infomed",
-    "piramide": "Pirâmide",
 }
 
 
@@ -45,9 +44,6 @@ def _checar_um_sistema(job_id, sistema_id, email, cpf, nome_completo, nome_conta
         elif sistema_id == "infomed":
             from rpa_infomed import consultar_status_infomed
             status_bruto, detalhe = consultar_status_infomed(email)
-        elif sistema_id == "piramide":
-            from rpa_piramide import consultar_status_piramide
-            status_bruto, detalhe = consultar_status_piramide(email)
         else:
             status_bruto, detalhe = "erro", "Sistema desconhecido"
     except Exception as e:

@@ -56,6 +56,14 @@ from painel.piramide import PiramideConfigError, buscar_usuarios as piramide_bus
 from painel.piramide import definir_ativo as piramide_definir_ativo
 from painel.piramide import obter_usuario as piramide_obter_usuario
 from painel.piramide import editar_dados as piramide_editar_dados
+from painel.piramide import criar_usuario as piramide_criar_usuario
+from painel.piramide import redefinir_senha as piramide_redefinir_senha
+from painel.piramide import filiais as piramide_filiais, proxima_matricula as piramide_proxima_matricula
+from painel.piramide import empresas_disponiveis as piramide_empresas, listar_perfis as piramide_perfis
+from painel.piramide import consultar_colaboradores as piramide_consultar_colaboradores
+from painel.piramide import ambiente as piramide_ambiente, ORIGENS as PIRAMIDE_ORIGENS
+from painel.piramide import status_indice_emails as piramide_status_indice
+from painel.piramide import iniciar_reconstrucao_em_segundo_plano as piramide_iniciar_indice
 from google_admin import GoogleAdminConfigError
 from painel.jobs import iniciar_job_inativacao, obter_status_job
 from painel.rpa_status_jobs import NOMES_SISTEMAS, iniciar_job_status_sistemas, obter_status_job_sistemas
@@ -101,13 +109,12 @@ SISTEMAS_DISPONIVEIS = [
     ("ged", "GED Bye Bye Paper"),
     ("tasy", "Tasy EMR"),
     ("infomed", "Infomed"),
-    ("piramide", "Pirâmide"),
     ("google", "Google Workspace"),
 ]
 
 # todos os sistemas acima já suportam ativar E desativar - mantido como um set
 # separado pra facilitar esmaecer na tela algum sistema que no futuro só suporte uma direção
-SISTEMAS_SUPORTAM_ATIVAR = {"ad", "crm", "saw", "giu", "nextqs", "ged", "tasy", "infomed", "piramide", "google"}
+SISTEMAS_SUPORTAM_ATIVAR = {"ad", "crm", "saw", "giu", "nextqs", "ged", "tasy", "infomed", "google"}
 
 
 def login_obrigatorio(view):
@@ -1282,7 +1289,17 @@ def tela_piramide():
         except Exception as e:
             erro = f"Falha ao consultar o Pirâmide: {e}"
 
-    return render_template("piramide.html", q=q, usuarios=usuarios, erro=erro)
+    try:
+        indice = piramide_status_indice()
+    except Exception:
+        indice = None
+
+    return render_template(
+        "piramide.html", q=q, usuarios=usuarios, erro=erro,
+        ambiente=piramide_ambiente(), origens=PIRAMIDE_ORIGENS,
+        indice=indice, filiais=piramide_filiais(),
+        empresas=piramide_empresas(), perfis=piramide_perfis(),
+    )
 
 
 @painel_bp.route("/api/piramide/usuario/<login>")
@@ -1310,7 +1327,7 @@ def api_piramide_editar_dados(login):
         return jsonify({"erro": "Nome é obrigatório."}), 400
 
     try:
-        ok, mensagem = piramide_editar_dados(login, nome, email)
+        ok, mensagem = piramide_editar_dados(login, nome, email, operador=session["usuario"]["login"])
     except PiramideConfigError as e:
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
@@ -1326,7 +1343,7 @@ def api_piramide_editar_dados(login):
 def api_piramide_definir_ativo(login):
     ativo = request.form.get("ativo") == "1"
     try:
-        ok, mensagem = piramide_definir_ativo(login, ativo)
+        ok, mensagem = piramide_definir_ativo(login, ativo, operador=session["usuario"]["login"])
     except PiramideConfigError as e:
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
@@ -1335,6 +1352,85 @@ def api_piramide_definir_ativo(login):
     if not ok:
         return jsonify({"erro": mensagem}), 400
     return jsonify({"mensagem": mensagem, "ativo": ativo})
+
+
+@painel_bp.route("/api/piramide/usuario/<login>/senha", methods=["POST"])
+@login_obrigatorio
+def api_piramide_redefinir_senha(login):
+    senha = request.form.get("senha") or ""
+    try:
+        ok, mensagem, resultado = piramide_redefinir_senha(login, senha, operador=session["usuario"]["login"])
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao redefinir a senha no Pirâmide: {e}"}), 502
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, **(resultado or {})})
+
+
+@painel_bp.route("/api/piramide/colaboradores")
+@login_obrigatorio
+def api_piramide_colaboradores():
+    termo = request.args.get("q", "").strip()
+    if len(termo) < 3:
+        return jsonify({"erro": "Digite pelo menos 3 letras do nome."}), 400
+    try:
+        filial = request.args.get("filial", "").strip() or None
+        return jsonify({"colaboradores": piramide_consultar_colaboradores(termo, filial=filial)})
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar colaboradores no Pirâmide: {e}"}), 502
+
+
+@painel_bp.route("/api/piramide/proxima-matricula")
+@login_obrigatorio
+def api_piramide_proxima_matricula():
+    filial = request.args.get("filial", "").strip()
+    try:
+        return jsonify({"matricula": piramide_proxima_matricula(filial)})
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao calcular a matrícula: {e}"}), 502
+
+
+@painel_bp.route("/api/piramide/indice", methods=["POST"])
+@login_obrigatorio
+def api_piramide_indice():
+    try:
+        if request.args.get("status") == "1":
+            return jsonify(piramide_status_indice(iniciar_se_vencido=False) or {})
+        iniciado = piramide_iniciar_indice()
+        mensagem = "Atualização do índice iniciada." if iniciado else "O índice já está sendo atualizado."
+        return jsonify({"mensagem": mensagem, **(piramide_status_indice(iniciar_se_vencido=False) or {})})
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao montar o índice: {e}"}), 502
+
+
+@painel_bp.route("/api/piramide/novo", methods=["POST"])
+@login_obrigatorio
+def api_piramide_novo():
+    campos = {k: (request.form.get(k) or "").strip() for k in
+              ("login", "nome", "email", "cod_perfil", "cod_unid_origem", "cod_cargo", "filial")}
+    if not all(campos.values()):
+        return jsonify({"erro": "Preencha todos os campos."}), 400
+    opcionais = {k: (request.form.get(k) or "").strip() for k in ("cod_colaborador", "matricula")}
+    opcionais["empresas"] = [e.strip() for e in request.form.getlist("empresas") if e.strip()]
+    opcionais["senha"] = request.form.get("senha") or ""
+    try:
+        ok, mensagem, resultado = piramide_criar_usuario(**campos, **opcionais, operador=session["usuario"]["login"])
+    except PiramideConfigError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao criar usuário no Pirâmide: {e}"}), 502
+
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+    return jsonify({"mensagem": mensagem, **resultado})
 
 
 @painel_bp.route("/giu", endpoint="giu")

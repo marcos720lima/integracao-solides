@@ -4,7 +4,7 @@
 {% block conteudo %}
 <div class="page-header">
   <h1>Pirâmide</h1>
-  <p>Busca direta no banco do Pirâmide — ativar, inativar e editar dados de usuário.</p>
+  <p>Pesquisar, ativar, inativar, editar e criar usuário do Pirâmide.</p>
 </div>
 
 {% if erro %}
@@ -18,7 +18,20 @@
       <input type="text" id="q" name="q" value="{{ q }}" placeholder="Ex: jordyg">
     </div>
     <button type="submit" class="btn btn-primario">Buscar</button>
+    <button type="button" class="btn btn-primario" onclick="abrirModalNovoPiramide()" style="margin-left:auto;">+ Novo acesso</button>
   </form>
+  <div style="font-size:12px; color:var(--text-muted); display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:-4px 0 10px;">
+    <span id="piramide-indice-texto">
+      {% if indice and indice.rodando %}
+        Atualizando índice de e-mails… (leva alguns minutos)
+      {% elif indice and indice.existe %}
+        Busca por e-mail: índice com {{ indice.total_emails }} e-mails · montado em {{ indice.gerado_em }}
+      {% else %}
+        Busca por e-mail: índice ainda não montado.
+      {% endif %}
+    </span>
+    <a href="#" id="btn-indice-piramide" onclick="piramideAtualizarIndice(); return false;">atualizar</a>
+  </div>
 
   {% if q and usuarios %}
   <div style="overflow-x:auto;">
@@ -36,13 +49,13 @@
       </thead>
       <tbody>
         {% for u in usuarios %}
-        <tr>
+        <tr data-login="{{ u.login }}">
           <td class="mono">{{ u.login }}</td>
           <td>{{ u.nome }}</td>
           <td>{{ u.email or '—' }}</td>
           <td>{% if u.origem %}{{ u.origem }} <span class="mono" style="color:var(--text-muted);">({{ u.origem_codigo }})</span>{% elif u.origem_codigo %}{{ u.origem_codigo }}{% else %}—{% endif %}</td>
           <td>{% if u.perfil %}{{ u.perfil }} <span class="mono" style="color:var(--text-muted);">({{ u.perfil_codigo }})</span>{% elif u.perfil_codigo %}{{ u.perfil_codigo }}{% else %}—{% endif %}</td>
-          <td><span class="badge badge-{{ 'sucesso' if u.ativo else 'erro' }}">{{ 'Ativo' if u.ativo else 'Inativo' }}</span></td>
+          <td><span class="badge badge-{{ 'sucesso' if u.ativo else 'erro' }}" data-status>{{ 'Ativo' if u.ativo else 'Inativo' }}</span></td>
           <td>
             <button type="button" class="botao-olho" title="Gerenciar" onclick="abrirModalPiramide('{{ u.login }}')">
               <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -78,13 +91,35 @@
       <div class="detalhe-rotulo" style="margin-bottom:10px;">Dados</div>
       <div class="form-horario" style="margin-bottom:16px;">
         <label for="piramide-nome">Nome</label>
-        <input type="text" id="piramide-nome">
+        <input type="text" id="piramide-nome" readonly>
 
         <label for="piramide-email" style="margin-top:8px; display:block;">Email</label>
-        <input type="text" id="piramide-email">
+        <input type="text" id="piramide-email" readonly>
 
-        <div id="piramide-resultado-dados" style="margin:10px 0; font-size:13px;"></div>
-        <button type="button" class="btn btn-primario" onclick="piramideSalvarDados()">Salvar dados</button>
+        
+        <p style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+          Pela API não dá pra editar nome, e-mail ou filial sem trocar a senha — faça essas alterações direto no Pirâmide.
+        </p>
+        
+      </div>
+
+      
+      <hr style="border-color:var(--border); margin:18px 0;">
+      <div class="detalhe-rotulo" style="margin-bottom:10px;">Redefinir senha</div>
+      <div class="form-horario" style="margin-bottom:8px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
+          <input type="radio" name="piramide-tipo-senha" value="auto" checked onchange="piramideTipoSenha()"> Gerar senha automática
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; margin-top:4px;">
+          <input type="radio" name="piramide-tipo-senha" value="manual" onchange="piramideTipoSenha()"> Definir senha
+        </label>
+        <input type="text" id="piramide-senha-manual" placeholder="Nova senha (6 a 30 caracteres, sem espaços)" style="display:none; margin-top:8px;" autocomplete="off">
+        <div id="piramide-resultado-senha" style="margin:10px 0; font-size:13px;"></div>
+        <div id="piramide-senha-nova-box" style="display:none; gap:8px; align-items:center; margin-bottom:10px;">
+          <input type="text" id="piramide-senha-nova" readonly class="mono" style="flex:1;">
+          <button type="button" class="btn btn-primario" onclick="navigator.clipboard.writeText(document.getElementById('piramide-senha-nova').value); mostrarToast('Senha copiada.', 'sucesso');">Copiar</button>
+        </div>
+        <button type="button" class="btn btn-primario" id="btn-redefinir-senha" onclick="piramideRedefinirSenha()">Redefinir senha</button>
       </div>
 
       <hr style="border-color:var(--border); margin:18px 0;">
@@ -105,6 +140,149 @@
     </div>
   </div>
 </div>
+
+
+<div class="modal-overlay" id="modal-piramide-novo" onclick="if (event.target.id === 'modal-piramide-novo') fecharModalNovoPiramide()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo">Novo acesso no Pirâmide</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharModalNovoPiramide()">&times;</button>
+    </div>
+
+    <div id="piramide-novo-form">
+      <div style="display:flex; gap:6px; padding:12px 20px 0; font-size:12px;">
+        <span class="badge" data-passo-ind="1">1 · Pessoa</span>
+        <span class="badge" data-passo-ind="2">2 · Financeiro</span>
+        <span class="badge" data-passo-ind="3">3 · Acesso no Pirâmide</span>
+      </div>
+
+      <div style="padding:14px 20px;">
+        <div data-passo="1">
+          <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">
+            Cria tudo de uma vez: o <strong>colaborador no Financeiro</strong> (se ainda não existir), o <strong>usuário no Administrador</strong> (login do Pirâmide), a Identificação Filial e as Empresas.
+          </p>
+          <div class="form-horario">
+            <label for="novo-login">Login</label>
+            <input type="text" id="novo-login" maxlength="30" style="text-transform:uppercase;" placeholder="Ex: MARCOSL">
+
+            <label for="novo-nome" style="margin-top:8px; display:block;">Nome completo</label>
+            <input type="text" id="novo-nome" style="text-transform:uppercase;">
+
+            <label for="novo-email" style="margin-top:8px; display:block;">E-mail</label>
+            <input type="text" id="novo-email" placeholder="nome@unimedoestedopara.coop.br">
+
+            <label style="margin-top:10px; display:block;">Senha inicial do Pirâmide</label>
+            <div style="display:flex; gap:16px; font-size:13px;">
+              <label style="display:flex; align-items:center; gap:6px; font-weight:normal; margin:0;">
+                <input type="radio" name="novo-tipo-senha" value="auto" checked onchange="piramideNovoTipoSenha()"> Gerar automática
+              </label>
+              <label style="display:flex; align-items:center; gap:6px; font-weight:normal; margin:0;">
+                <input type="radio" name="novo-tipo-senha" value="manual" onchange="piramideNovoTipoSenha()"> Definir senha
+              </label>
+            </div>
+            <input type="text" id="novo-senha" placeholder="Nova senha (6 a 30 caracteres, sem espaços)" style="display:none; margin-top:6px;" autocomplete="off">
+          </div>
+        </div>
+
+        <div data-passo="2" style="display:none;">
+          <div class="form-horario">
+            <label for="novo-filial">Filial da pessoa</label>
+            <select id="novo-filial" onchange="piramideFilialMudou()">
+              <option value="">— escolha —</option>
+              {% for codigo, nome in filiais %}
+              <option value="{{ codigo }}">{{ codigo }} — {{ nome }}</option>
+              {% endfor %}
+            </select>
+
+            <label for="piramide-colab-busca" style="margin-top:10px; display:block;">Colaborador já cadastrado nessa filial?</label>
+            <div style="display:flex; gap:8px;">
+              <input type="text" id="piramide-colab-busca" placeholder="Buscar pelo nome (mínimo 3 letras)" style="flex:1;">
+              <button type="button" class="btn btn-primario" onclick="piramideBuscarColaborador()">Buscar</button>
+            </div>
+            <div id="piramide-colab-resultado" style="margin-top:8px; font-size:13px; max-height:140px; overflow-y:auto;"></div>
+            <div id="piramide-colab-escolhido" style="margin-top:8px; font-size:13px;"></div>
+
+            <div id="piramide-colab-novo" style="margin-top:10px;">
+              <div style="font-size:13px; margin-bottom:6px;">Nenhum colaborador escolhido: será <strong>criado um colaborador novo</strong> nessa filial.</div>
+              <label for="novo-matricula">Matrícula</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="novo-matricula" placeholder="Escolha a filial" style="flex:1;">
+                <button type="button" class="btn btn-primario" onclick="piramideProximaMatricula()">Próxima</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div data-passo="3" style="display:none;">
+          <div class="form-horario">
+            <div style="display:flex; gap:10px;">
+              <div style="flex:1;">
+                <label for="novo-perfil">Perfil default</label>
+                {% if perfis %}
+                <select id="novo-perfil">
+                  {% for codigo, nome in perfis %}
+                  <option value="{{ codigo }}" {% if codigo == '21' %}selected{% endif %}>{{ nome }} ({{ codigo }})</option>
+                  {% endfor %}
+                </select>
+                {% else %}
+                <input type="text" id="novo-perfil" value="21">
+                {% endif %}
+              </div>
+              <div style="flex:1;">
+                <label for="novo-origem">Origem</label>
+                <select id="novo-origem">
+                  {% for codigo, desc in origens %}
+                  <option value="{{ codigo }}">{{ desc }} ({{ codigo }})</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div style="width:80px;">
+                <label for="novo-cargo">Cargo</label>
+                <input type="text" id="novo-cargo" value="06">
+              </div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px;">
+              <label style="margin:0;">Empresas liberadas</label>
+              <span style="font-size:12px;">
+                <a href="#" onclick="piramideMarcarEmpresas(true); return false;">marcar todas</a> ·
+                <a href="#" onclick="piramideMarcarEmpresas(false); return false;">desmarcar</a>
+              </span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 12px; margin-top:6px; font-size:13px;">
+              {% for codigo, nome, padrao in empresas %}
+              <label style="display:flex; align-items:center; gap:6px; font-weight:normal; margin:0;">
+                <input type="checkbox" name="novo-empresa" value="{{ codigo }}" data-padrao="{{ '1' if padrao else '0' }}" {% if padrao %}checked{% endif %}>
+                <span class="mono">{{ codigo }}</span> {{ nome }}
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div id="piramide-novo-resultado" style="margin:12px 0 0; font-size:13px;"></div>
+
+        <div style="display:flex; justify-content:space-between; margin-top:14px;">
+          <button type="button" class="btn" id="btn-novo-voltar" onclick="piramidePasso(-1)">Voltar</button>
+          <button type="button" class="btn btn-primario" id="btn-novo-avancar" onclick="piramidePasso(1)">Avançar</button>
+          <button type="button" class="btn btn-primario" id="btn-criar-piramide" onclick="piramideCriarUsuario()" style="display:none;">Criar acesso</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:16px 20px; display:none;" id="piramide-novo-sucesso">
+      <div class="aviso aviso-sucesso" id="piramide-novo-mensagem"></div>
+      <ul id="piramide-novo-etapas" style="font-size:13px; margin:10px 0; padding-left:18px;"></ul>
+      <p style="font-size:13px; margin:12px 0 6px;">Senha inicial do Pirâmide (mostrada só agora, não fica salva — depois dá pra trocar em "Redefinir senha" no card do usuário):</p>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input type="text" id="piramide-novo-senha" readonly class="mono" style="flex:1;">
+        <button type="button" class="btn btn-primario" onclick="navigator.clipboard.writeText(document.getElementById('piramide-novo-senha').value); mostrarToast('Senha copiada.', 'sucesso');">Copiar</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -118,8 +296,10 @@
     document.getElementById('piramide-modal-nome').textContent = 'Carregando…';
     document.getElementById('piramide-modal-login').textContent = '';
     document.getElementById('piramide-modal-erro').style.display = 'none';
-    document.getElementById('piramide-resultado-dados').textContent = '';
+    const resultadoDados = document.getElementById('piramide-resultado-dados');
+    if (resultadoDados) resultadoDados.textContent = '';
     document.getElementById('piramide-resultado-status').textContent = '';
+    piramideLimparSenha();
 
     try {
       const resposta = await fetch(`/painel/api/piramide/usuario/${login}`);
@@ -145,6 +325,62 @@
       atualizarStatusPiramide(dados.ativo);
     } catch (e) {
       document.getElementById('piramide-modal-nome').textContent = 'Falha ao carregar.';
+    }
+  }
+
+  function piramideTipoSenha() {
+    const manual = document.querySelector('input[name="piramide-tipo-senha"]:checked').value === 'manual';
+    document.getElementById('piramide-senha-manual').style.display = manual ? 'block' : 'none';
+  }
+
+  function piramideLimparSenha() {
+    const auto = document.querySelector('input[name="piramide-tipo-senha"][value="auto"]');
+    if (!auto) return;
+    auto.checked = true;
+    piramideTipoSenha();
+    document.getElementById('piramide-senha-manual').value = '';
+    document.getElementById('piramide-resultado-senha').textContent = '';
+    document.getElementById('piramide-resultado-senha').className = '';
+    document.getElementById('piramide-senha-nova-box').style.display = 'none';
+    document.getElementById('piramide-senha-nova').value = '';
+  }
+
+  async function piramideRedefinirSenha() {
+    if (!piramideLoginAtual) return;
+    const manual = document.querySelector('input[name="piramide-tipo-senha"]:checked').value === 'manual';
+    const senha = manual ? document.getElementById('piramide-senha-manual').value.trim() : '';
+    const resultado = document.getElementById('piramide-resultado-senha');
+    if (manual && !senha) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Digite a nova senha.';
+      return;
+    }
+    if (!confirm(`Redefinir a senha do Pirâmide de ${piramideLoginAtual}? A senha atual deixa de funcionar.`)) return;
+
+    const botao = document.getElementById('btn-redefinir-senha');
+    botao.disabled = true;
+    resultado.className = '';
+    resultado.textContent = 'Redefinindo…';
+    try {
+      const resposta = await fetch(`/painel/api/piramide/usuario/${piramideLoginAtual}/senha`, {
+        method: 'POST', body: new URLSearchParams({ senha }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      resultado.className = dados.mensagem.includes('MAS') ? 'aviso aviso-erro' : 'aviso aviso-sucesso';
+      resultado.textContent = dados.mensagem;
+      document.getElementById('piramide-senha-nova').value = dados.senha;
+      document.getElementById('piramide-senha-nova-box').style.display = 'flex';
+      document.getElementById('piramide-senha-manual').value = '';
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao redefinir a senha.';
+    } finally {
+      botao.disabled = false;
     }
   }
 
@@ -210,9 +446,296 @@
       resultado.className = 'aviso aviso-sucesso';
       resultado.textContent = dados.mensagem;
       atualizarStatusPiramide(dados.ativo);
+      const badgeLinha = document.querySelector(`tr[data-login="${CSS.escape(piramideLoginAtual)}"] [data-status]`);
+      if (badgeLinha) {
+        badgeLinha.textContent = dados.ativo ? 'Ativo' : 'Inativo';
+        badgeLinha.className = `badge badge-${dados.ativo ? 'sucesso' : 'erro'}`;
+      }
     } catch (e) {
       resultado.className = 'aviso aviso-erro';
       resultado.textContent = 'Falha ao atualizar o status.';
+    }
+  }
+  function escaparHtml(texto) {
+    const div = document.createElement('div');
+    div.textContent = texto ?? '';
+    return div.innerHTML;
+  }
+
+  function textoIndice(d) {
+    if (d.rodando) return 'Atualizando índice de e-mails… (leva alguns minutos, pode continuar usando a tela)';
+    if (!d.existe) return d.erro ? `Índice não montado · erro: ${d.erro}` : 'Índice de e-mails ainda não montado.';
+    let t = `Índice de e-mails: ${d.total_emails} e-mails de ${d.total_usuarios} usuários · montado em ${d.gerado_em}`;
+    if (d.erro) t += ` · erro na última atualização: ${d.erro}`;
+    return t;
+  }
+
+  async function acompanharIndice() {
+    const texto = document.getElementById('piramide-indice-texto');
+    const botao = document.getElementById('btn-indice-piramide');
+    try {
+      const resposta = await fetch('/painel/api/piramide/indice?status=1', { method: 'POST' });
+      const dados = await resposta.json();
+      texto.textContent = textoIndice(dados);
+      if (dados.rodando) {
+        botao.disabled = true;
+        setTimeout(acompanharIndice, 10000);
+      } else {
+        botao.disabled = false;
+      }
+    } catch (e) {
+      setTimeout(acompanharIndice, 15000);
+    }
+  }
+
+  async function piramideAtualizarIndice() {
+    const botao = document.getElementById('btn-indice-piramide');
+    botao.disabled = true;
+    try {
+      const resposta = await fetch('/painel/api/piramide/indice', { method: 'POST' });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        mostrarToast(dados.erro || 'Falha ao iniciar a atualização do índice.', 'erro');
+        botao.disabled = false;
+        return;
+      }
+      mostrarToast(dados.mensagem, 'sucesso');
+      acompanharIndice();
+    } catch (e) {
+      botao.disabled = false;
+    }
+  }
+
+  {% if indice and indice.rodando %}document.addEventListener('DOMContentLoaded', acompanharIndice);{% endif %}
+
+  let piramideColabEscolhido = null;
+
+  let piramidePassoAtual = 1;
+
+  function piramideMostrarPasso(n) {
+    piramidePassoAtual = n;
+    document.querySelectorAll('[data-passo]').forEach(el => {
+      el.style.display = Number(el.dataset.passo) === n ? 'block' : 'none';
+    });
+    document.querySelectorAll('[data-passo-ind]').forEach(el => {
+      const p = Number(el.dataset.passoInd);
+      el.className = 'badge ' + (p === n ? 'badge-sucesso' : (p < n ? 'badge-pendente' : ''));
+    });
+    document.getElementById('btn-novo-voltar').style.visibility = n === 1 ? 'hidden' : 'visible';
+    document.getElementById('btn-novo-avancar').style.display = n === 3 ? 'none' : 'inline-block';
+    document.getElementById('btn-criar-piramide').style.display = n === 3 ? 'inline-block' : 'none';
+    const resultado = document.getElementById('piramide-novo-resultado');
+    resultado.className = '';
+    resultado.textContent = '';
+  }
+
+  function piramideErroPasso(msg) {
+    const resultado = document.getElementById('piramide-novo-resultado');
+    resultado.className = 'aviso aviso-erro';
+    resultado.textContent = msg;
+  }
+
+  function piramideNovoTipoSenha() {
+    const manual = document.querySelector('input[name="novo-tipo-senha"]:checked').value === 'manual';
+    document.getElementById('novo-senha').style.display = manual ? 'block' : 'none';
+    if (!manual) document.getElementById('novo-senha').value = '';
+  }
+
+  function piramideSenhaNova() {
+    const manual = document.querySelector('input[name="novo-tipo-senha"]:checked').value === 'manual';
+    return manual ? document.getElementById('novo-senha').value.trim() : '';
+  }
+
+  function piramidePasso(direcao) {
+    if (direcao > 0 && piramidePassoAtual === 1) {
+      const login = document.getElementById('novo-login').value.trim();
+      const nome = document.getElementById('novo-nome').value.trim();
+      const email = document.getElementById('novo-email').value.trim();
+      if (!login || !nome || !email) return piramideErroPasso('Preencha login, nome e e-mail.');
+      if (!/^[A-Za-z0-9_]{1,30}$/.test(login)) return piramideErroPasso('Login: só letras, números ou _ (até 30).');
+      const manual = document.querySelector('input[name="novo-tipo-senha"]:checked').value === 'manual';
+      const senha = piramideSenhaNova();
+      if (manual && (senha.length < 6 || senha.length > 30 || /\s/.test(senha))) {
+        return piramideErroPasso('A senha precisa ter de 6 a 30 caracteres, sem espaços.');
+      }
+    }
+    if (direcao > 0 && piramidePassoAtual === 2) {
+      if (!document.getElementById('novo-filial').value) return piramideErroPasso('Escolha a filial da pessoa.');
+      if (!piramideColabEscolhido && !document.getElementById('novo-matricula').value.trim()) {
+        return piramideErroPasso('Escolha um colaborador ou informe a matrícula do colaborador novo.');
+      }
+    }
+    piramideMostrarPasso(Math.min(3, Math.max(1, piramidePassoAtual + direcao)));
+  }
+
+  function piramideMarcarEmpresas(marcar) {
+    document.querySelectorAll('input[name="novo-empresa"]').forEach(cb => {
+      cb.checked = marcar && cb.dataset.padrao === '1';
+    });
+  }
+
+  function abrirModalNovoPiramide() {
+    document.getElementById('piramide-novo-form').style.display = 'block';
+    document.getElementById('piramide-novo-sucesso').style.display = 'none';
+    document.getElementById('piramide-colab-resultado').textContent = '';
+    ['novo-login', 'novo-nome', 'novo-email', 'piramide-colab-busca', 'novo-matricula'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('novo-filial').value = '';
+    document.querySelector('input[name="novo-tipo-senha"][value="auto"]').checked = true;
+    piramideNovoTipoSenha();
+    piramideEscolherColaborador(null);
+    piramideMarcarEmpresas(true);
+    piramideMostrarPasso(1);
+    document.getElementById('modal-piramide-novo').classList.add('aberto');
+  }
+
+  function fecharModalNovoPiramide() {
+    document.getElementById('modal-piramide-novo').classList.remove('aberto');
+  }
+
+  function piramideEscolherColaborador(c) {
+    piramideColabEscolhido = c;
+    const alvo = document.getElementById('piramide-colab-escolhido');
+    document.getElementById('piramide-colab-novo').style.display = c ? 'none' : 'block';
+    if (!c) {
+      alvo.innerHTML = '';
+      return;
+    }
+    alvo.innerHTML = `<div class="aviso aviso-sucesso">Colaborador escolhido: <strong>${escaparHtml(c.nome)}</strong>
+      <span class="mono">${escaparHtml(c.codigo)}</span> · mat. ${escaparHtml(c.matricula || '—')}
+      <a href="#" id="piramide-colab-trocar" style="margin-left:8px;">trocar</a></div>`;
+    document.getElementById('piramide-colab-trocar').addEventListener('click', (ev) => {
+      ev.preventDefault();
+      piramideEscolherColaborador(null);
+    });
+    if (!document.getElementById('novo-nome').value) {
+      document.getElementById('novo-nome').value = (c.nome || '').toUpperCase();
+    }
+  }
+
+  function piramideFilialMudou() {
+    piramideEscolherColaborador(null);
+    document.getElementById('piramide-colab-resultado').textContent = '';
+    document.getElementById('novo-matricula').value = '';
+    if (document.getElementById('novo-filial').value) piramideProximaMatricula();
+  }
+
+  async function piramideProximaMatricula() {
+    const filial = document.getElementById('novo-filial').value;
+    const campo = document.getElementById('novo-matricula');
+    if (!filial) {
+      mostrarToast('Escolha a filial primeiro.', 'erro');
+      return;
+    }
+    campo.value = '';
+    campo.placeholder = 'Calculando…';
+    try {
+      const resposta = await fetch(`/painel/api/piramide/proxima-matricula?filial=${encodeURIComponent(filial)}`);
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        campo.placeholder = 'Digite a matrícula';
+        mostrarToast(dados.erro || 'Falha ao calcular a matrícula.', 'erro');
+        return;
+      }
+      campo.value = dados.matricula;
+    } catch (e) {
+      campo.placeholder = 'Digite a matrícula';
+    }
+  }
+
+  async function piramideBuscarColaborador() {
+    const termo = document.getElementById('piramide-colab-busca').value.trim();
+    const filial = document.getElementById('novo-filial').value;
+    const alvo = document.getElementById('piramide-colab-resultado');
+    if (!filial) {
+      mostrarToast('Escolha a filial primeiro.', 'erro');
+      return;
+    }
+    alvo.className = '';
+    alvo.textContent = 'Buscando…';
+    try {
+      const resposta = await fetch(`/painel/api/piramide/colaboradores?q=${encodeURIComponent(termo)}&filial=${encodeURIComponent(filial)}`);
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        alvo.className = 'aviso aviso-erro';
+        alvo.textContent = dados.erro;
+        return;
+      }
+      if (!dados.colaboradores.length) {
+        alvo.textContent = 'Nenhum colaborador com esse nome nessa filial — será criado um novo.';
+        return;
+      }
+      alvo.innerHTML = dados.colaboradores.map((c, i) => `
+        <div style="padding:6px 8px; border-bottom:1px solid var(--border); cursor:pointer;" data-i="${i}">
+          <strong>${escaparHtml(c.nome)}</strong>
+          <span class="mono" style="color:var(--text-muted);"> ${escaparHtml(c.codigo)} · mat. ${escaparHtml(c.matricula || '—')}</span>
+          ${c.situacao ? `<span style="color:var(--text-muted);"> · ${escaparHtml(c.situacao)}</span>` : ''}
+        </div>`).join('');
+      alvo.querySelectorAll('[data-i]').forEach(el => el.addEventListener('click', () => {
+        piramideEscolherColaborador(dados.colaboradores[Number(el.dataset.i)]);
+        alvo.textContent = '';
+      }));
+    } catch (e) {
+      alvo.className = 'aviso aviso-erro';
+      alvo.textContent = 'Falha ao buscar colaborador.';
+    }
+  }
+
+  async function piramideCriarUsuario() {
+    const resultado = document.getElementById('piramide-novo-resultado');
+    const botao = document.getElementById('btn-criar-piramide');
+    const empresas = [...document.querySelectorAll('input[name="novo-empresa"]:checked')].map(cb => cb.value);
+    const corpo = new URLSearchParams({
+      login: document.getElementById('novo-login').value.trim().toUpperCase(),
+      nome: document.getElementById('novo-nome').value.trim(),
+      email: document.getElementById('novo-email').value.trim(),
+      cod_unid_origem: document.getElementById('novo-origem').value,
+      cod_perfil: document.getElementById('novo-perfil').value.trim(),
+      cod_cargo: document.getElementById('novo-cargo').value.trim(),
+      filial: document.getElementById('novo-filial').value,
+      cod_colaborador: piramideColabEscolhido ? piramideColabEscolhido.codigo : '',
+      matricula: piramideColabEscolhido ? '' : document.getElementById('novo-matricula').value.trim(),
+    });
+    empresas.forEach(e => corpo.append('empresas', e));
+    const senhaDefinida = piramideSenhaNova();
+    if (senhaDefinida) corpo.append('senha', senhaDefinida);
+
+    const colab = piramideColabEscolhido
+      ? `usar o colaborador ${piramideColabEscolhido.codigo} (${piramideColabEscolhido.nome})`
+      : `CRIAR colaborador novo, matrícula ${corpo.get('matricula')}`;
+    const resumo = [
+      `Criar no Pirâmide ({{ ambiente }}):`,
+      ``,
+      `• Login: ${corpo.get('login')} — ${corpo.get('nome').toUpperCase()}`,
+      `• Financeiro: filial ${corpo.get('filial')}, ${colab}`,
+      `• Empresas: ${empresas.length ? empresas.join(', ') : 'nenhuma'}`,
+      `• Senha: ${senhaDefinida ? 'definida por você' : 'gerada automaticamente'}`,
+    ].join('\n');
+    if (!confirm(resumo)) return;
+
+    botao.disabled = true;
+    resultado.className = '';
+    resultado.textContent = 'Criando… pode levar alguns segundos.';
+    try {
+      const resposta = await fetch('/painel/api/piramide/novo', { method: 'POST', body: corpo });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        resultado.className = 'aviso aviso-erro';
+        resultado.textContent = dados.erro;
+        return;
+      }
+      document.getElementById('piramide-novo-form').style.display = 'none';
+      document.getElementById('piramide-novo-sucesso').style.display = 'block';
+      const msg = document.getElementById('piramide-novo-mensagem');
+      msg.className = dados.aviso ? 'aviso aviso-erro' : 'aviso aviso-sucesso';
+      msg.textContent = dados.aviso ? `Acesso ${dados.login} criado, com pendência — veja abaixo.` : `Acesso ${dados.login} criado.`;
+      document.getElementById('piramide-novo-etapas').innerHTML =
+        (dados.etapas || []).map(e => `<li>${escaparHtml(e)}</li>`).join('');
+      document.getElementById('piramide-novo-senha').value = dados.senha_piramide;
+    } catch (e) {
+      resultado.className = 'aviso aviso-erro';
+      resultado.textContent = 'Falha ao criar o usuário.';
+    } finally {
+      botao.disabled = false;
     }
   }
 </script>

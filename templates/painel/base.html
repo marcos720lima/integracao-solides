@@ -12,6 +12,13 @@
         if (tema === 'escuro') document.documentElement.setAttribute('data-theme', 'escuro');
       } catch (e) {}
     })();
+    // Mesma ideia pra sidebar recolhida - aplica antes de pintar, sem piscar
+    (function () {
+      try {
+        var sidebar = localStorage.getItem('painel-sidebar');
+        if (sidebar === 'colapsada') document.documentElement.setAttribute('data-sidebar', 'colapsada');
+      } catch (e) {}
+    })();
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -21,6 +28,11 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="sidebar-brand">
+        <button type="button" class="botao-colapsar-sidebar" id="botao-colapsar-sidebar" aria-label="Recolher menu">
+          <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12.5 4.5 7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <img src="{{ url_for('painel.static', filename='img/logo_unimed.png') }}" alt="Unimed Oeste do Pará" class="logo-unimed">
         <div class="titulo">Gestão de Identidade e Acesso</div>
         <div class="subtitulo">Painel administrativo · TI</div>
@@ -208,6 +220,12 @@
       </div>
     </aside>
 
+    <button type="button" class="botao-expandir-sidebar" id="botao-expandir-sidebar" aria-label="Expandir menu">
+      <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M7.5 4.5 13 10l-5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+
     <main class="content">
       {% with mensagens = get_flashed_messages(with_categories=true) %}
         {% if mensagens %}
@@ -251,6 +269,27 @@
           try { localStorage.setItem('painel-tema', 'escuro'); } catch (e) {}
         }
       });
+    })();
+  </script>
+
+  <script>
+    (function () {
+      var botaoColapsar = document.getElementById('botao-colapsar-sidebar');
+      var botaoExpandir = document.getElementById('botao-expandir-sidebar');
+      if (!botaoColapsar || !botaoExpandir) return;
+
+      function definirColapsada(colapsada) {
+        if (colapsada) {
+          document.documentElement.setAttribute('data-sidebar', 'colapsada');
+          try { localStorage.setItem('painel-sidebar', 'colapsada'); } catch (e) {}
+        } else {
+          document.documentElement.removeAttribute('data-sidebar');
+          try { localStorage.setItem('painel-sidebar', 'expandida'); } catch (e) {}
+        }
+      }
+
+      botaoColapsar.addEventListener('click', function () { definirColapsada(true); });
+      botaoExpandir.addEventListener('click', function () { definirColapsada(false); });
     })();
   </script>
 </body>

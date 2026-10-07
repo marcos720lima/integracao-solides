@@ -98,11 +98,6 @@ SISTEMAS = {
         'requer': ['email'],
         'script': 'rpa_infomed.py'
     },
-    'piramide': {
-        'nome': 'Pirâmide',
-        'requer': ['email'],
-        'script': 'rpa_piramide.py'
-    },
     'nextqs': {
         'nome': 'NextQS Manager',
         'requer': ['email'],
@@ -417,7 +412,7 @@ Exemplos:
     parser.add_argument('--email', help='Email corporativo')
     parser.add_argument('--nome', help='Nome completo (para Tasy)')
     parser.add_argument('--sistemas', nargs='+', 
-                        choices=['ad', 'crm', 'saw', 'giu', 'ged', 'tasy', 'infomed', 'piramide'],
+                        choices=['ad', 'crm', 'saw', 'giu', 'ged', 'tasy', 'infomed'],
                         help='Sistemas específicos para inativar')
     parser.add_argument('--pular-ad', action='store_true', 
                         help='Pular inativação no Active Directory')
@@ -438,7 +433,7 @@ Exemplos:
     if args.sistemas:
         sistemas_processar = args.sistemas
     else:
-        sistemas_processar = ['ad', 'crm', 'saw', 'giu', 'ged', 'tasy', 'infomed', 'piramide']
+        sistemas_processar = ['ad', 'crm', 'saw', 'giu', 'ged', 'tasy', 'infomed']
     
     if args.pular_ad and 'ad' in sistemas_processar:
         sistemas_processar.remove('ad')

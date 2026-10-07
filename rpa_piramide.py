@@ -1,6 +1,10 @@
 import sys
 
-from painel.piramide import PiramideConfigError, _conexao
+from painel.piramide import (
+    PiramideConfigError,
+    buscar_usuario_por_email,
+    definir_ativo,
+)
 
 SUCESSO = 0
 ERRO = 1
@@ -17,41 +21,31 @@ ACOES_VALIDAS = {
 
 
 def _definir_ativo_por_email(email_usuario, ativar):
-    conexao, schema = _conexao()
-    novo_valor = "A" if ativar else "I"
+    usuario = buscar_usuario_por_email(email_usuario)
+    if not usuario:
+        return NAO_ENCONTRADO
 
-    with conexao:
-        with conexao.cursor() as cursor:
-            cursor.execute(
-                f"SELECT nom_usuario_login, cod_situacao FROM {schema}.usuario WHERE UPPER(dsc_email) = UPPER(:email)",
-                email=email_usuario,
-            )
-            linha = cursor.fetchone()
-            if not linha:
-                return NAO_ENCONTRADO
+    logins = usuario.get("logins") or []
+    if len(logins) > 1 and not ativar:
+        ativos = [u for u in logins if u["ativo"]]
+        if not ativos:
+            return JA_NO_ESTADO_DESEJADO
+        if len(ativos) == 1:
+            usuario = ativos[0]
+            logins = [usuario]
+    if len(logins) > 1:
+        nomes = ", ".join(f"{u['login']} ({'ativo' if u['ativo'] else 'inativo'})" for u in logins)
+        print(f"[PIRAMIDE] E-mail {email_usuario} está em mais de um login ({nomes}). "
+              "Não vou alterar sem saber qual é o certo — faça pela tela do Pirâmide.", file=sys.stderr)
+        return ERRO
 
-            login, situacao_atual = linha
+    if usuario["ativo"] == ativar:
+        return JA_NO_ESTADO_DESEJADO
 
-            if (situacao_atual == "A") == ativar:
-                return JA_NO_ESTADO_DESEJADO
-
-            cursor.execute(
-                f"SELECT COUNT(*) FROM {schema}.usuario WHERE nom_usuario_login = :login",
-                login=login,
-            )
-            if cursor.fetchone()[0] != 1:
-                return ERRO
-
-            cursor.execute(
-                f"""
-                UPDATE {schema}.usuario
-                SET cod_situacao = :novo_valor, dat_ult_alteracao = SYSDATE
-                WHERE nom_usuario_login = :login
-                """,
-                novo_valor=novo_valor, login=login,
-            )
-            conexao.commit()
-
+    ok, mensagem = definir_ativo(usuario["login"], ativar, operador="automacao")
+    if not ok:
+        print(f"[PIRAMIDE] {mensagem}", file=sys.stderr)
+        return ERRO
     return SUCESSO
 
 
@@ -80,22 +74,19 @@ def consultar_status_piramide(email_usuario):
         return ERRO, None
 
     try:
-        conexao, schema = _conexao()
-        with conexao:
-            with conexao.cursor() as cursor:
-                cursor.execute(
-                    f"SELECT nom_usuario_login, cod_situacao FROM {schema}.usuario WHERE UPPER(dsc_email) = UPPER(:email)",
-                    email=email_usuario,
-                )
-                linha = cursor.fetchone()
+        usuario = buscar_usuario_por_email(email_usuario)
     except Exception as e:
         return ERRO, str(e)
 
-    if not linha:
+    if not usuario:
         return NAO_ENCONTRADO, None
 
-    login, situacao = linha
-    return ("ativo" if situacao == "A" else "inativo"), login
+    logins = usuario.get("logins") or []
+    if len(logins) > 1:
+        return ERRO, "E-mail em mais de um login: " + ", ".join(
+            f"{u['login']} ({'ativo' if u['ativo'] else 'inativo'})" for u in logins)
+
+    return ("ativo" if usuario["ativo"] else "inativo"), usuario["login"]
 
 
 def ativar_usuario_piramide(email_usuario):
@@ -107,6 +98,9 @@ def desativar_usuario_piramide(email_usuario):
 
 
 if __name__ == '__main__':
+    from dotenv import load_dotenv
+    load_dotenv()
+
     if len(sys.argv) > 1:
         email = sys.argv[1]
     else:

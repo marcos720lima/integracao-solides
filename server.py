@@ -192,7 +192,7 @@ SISTEMAS_CONFIG = {
         'requer_ad': True  # Identifica pelo email corporativo (do AD)
     },
     'piramide': {
-        'ativo': False,  # fora do fluxo automático: inativar pode bloquear processos abertos que precisam do usuário ativo até finalizar. Usar só via ativação/inativação manual.
+        'ativo': False,  # fora do fluxo automático e do manual: inativar pode bloquear processos abertos, e o mesmo e-mail pode estar em mais de um login. Gerenciar só pela tela do Pirâmide.
         'script': 'rpa_piramide.py',
         'timeout': 60,
         'nome': 'Pirâmide',

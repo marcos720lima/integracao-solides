@@ -189,15 +189,14 @@ INFOMED_DB_SERVICE=
 # alternativa: INFOMED_DB_DSN + INFOMED_TNS_ADMIN (usa o alias do tnsnames.ora)
 # se der erro DPY-3015 (senha em formato antigo): INFOMED_ORACLE_CLIENT_DIR
 
-# Pirâmide (Oracle) - mesmo padrão do Infomed, ver opções A/B no env.example
-PIRAMIDE_DB_USER=
-PIRAMIDE_DB_PASSWORD=
-PIRAMIDE_DB_SCHEMA=PIRAMIDE
-PIRAMIDE_DB_HOST=
-PIRAMIDE_DB_PORT=1521
-PIRAMIDE_DB_SERVICE=
-# alternativa: PIRAMIDE_DB_DSN + PIRAMIDE_TNS_ADMIN
-# se der erro DPY-3015: PIRAMIDE_ORACLE_CLIENT_DIR
+# Pirâmide - API Pirâmide 360 (MV Procenge)
+PIRAMIDE_API_URL=http://192.168.0.5/Piramide360Service/
+PIRAMIDE_API_LOGIN=
+PIRAMIDE_API_SENHA=
+PIRAMIDE_API_VERSAO=Versão: 1.00.88
+PIRAMIDE_API_EMPRESA=196
+PIRAMIDE_API_PERMITIR_ESCRITA_PRODUCAO=N
+PIRAMIDE_API_LOG=logs/piramide_api.log
 
 # NextQS Manager - RPA (usado para status e ativar/inativar)
 NEXTQS_URL=https://manager.nextqs.com
@@ -278,11 +277,18 @@ O painel acessa o banco Oracle do Infomed **direto** (sem passar pela tela do si
 
 Se aparecer o erro `DPY-3015` (senha em formato pré-12c), instale o Oracle Instant Client e configure `INFOMED_ORACLE_CLIENT_DIR` apontando pra pasta dele — ativa o "modo thick", que entende os dois formatos de senha.
 
-### 5. Integração Pirâmide (Oracle)
+### 5. Integração Pirâmide (API Pirâmide 360)
 
-Mesmo padrão do Infomed: conexão direta ao banco Oracle da Pirâmide, sem passar pela tela do sistema. Configure `PIRAMIDE_DB_*` no `.env` (ver comentários completos no `env.example`); os erros `DPY-3015` e `getaddrinfo failed` se resolvem do mesmo jeito descrito acima para o Infomed.
+A tela do Pirâmide usa só a API oficial da MV (`painel/piramide_api.py` + `painel/piramide.py`), sem acesso ao banco:
 
-Diferente dos demais sistemas, a Pirâmide **não** entra no `SISTEMAS_CONFIG` do fluxo automático — só é acionada pela tela de Ativação/Inativação manual do painel ou por `inativar_manual.py --sistemas piramide`. O motivo está comentado no próprio `server.py`: inativar pode travar processos abertos que dependem do usuário ativo até serem concluídos.
+- pesquisa por nome, login ou e-mail (e-mail via índice montado pela API em `data/piramide_emails_*.json`);
+- ativar/inativar (`wsUSUARIO.AtivaDesativa`, que inverte o status atual);
+- redefinir senha (automática ou definida pelo operador);
+- novo acesso completo: colaborador no Financeiro (`wsCOLABORADOR.Incluir`, próxima matrícula da filial), login no Administrador (`wsUSUARIO.Incluir`, já com a Identificação Filial SOLICITANTE) e empresas liberadas (`wsUSUARIO_EMPRESA.Incluir`).
+
+Editar nome/e-mail/filial de um usuário existente não é feito pelo painel: o `Alterar` da API exige trocar a senha junto. Escrita em produção fica bloqueada até `PIRAMIDE_API_PERMITIR_ESCRITA_PRODUCAO=S`. Toda escrita vai para `logs/piramide_api.log` (sem senhas). `teste_piramide_api.py` tem os modos de diagnóstico usados na homologação.
+
+A Pirâmide **não** entra em nenhum fluxo automático nem na ativação/inativação manual ou na aba Sistemas: inativar pode travar processos abertos, e o mesmo e-mail pode estar em mais de um login. Gerenciar só pela tela própria.
 
 ### 6. GIU e NextQS: API oficial + ZenRows (RPA)
 
