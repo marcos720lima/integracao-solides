@@ -310,7 +310,7 @@ python server.py
 
 Ou, com o servidor de produção (Waitress):
 ```bash
-python -m waitress --host=0.0.0.0 --port=3000 server:app
+python -m waitress --host=0.0.0.0 --port=3000 --threads=16 server:app
 ```
 
 O painel web fica disponível em `http://localhost:3000/painel`.
@@ -557,7 +557,11 @@ Os logs são salvos automaticamente na pasta `logs/` com rotação:
 - `LOG_MAX_BYTES`: tamanho máximo de cada arquivo de log em bytes (padrão: `5242880`)
 - `LOG_BACKUP_COUNT`: quantidade de backups por log rotacionado (padrão: `10`)
 - `DESLIGAMENTOS_CSV`: caminho completo do CSV permanente de desligamentos
-- `WORKPLACE_CACHE_TTL_SECONDS` / `JOB_ROLE_CACHE_TTL_SECONDS` / `EMPLOYEES_CACHE_TTL_SECONDS`: tempo de cache das consultas ao Tangerino no painel (padrão: 600s / 600s / 90s)
+- `WORKPLACE_CACHE_TTL_SECONDS` / `JOB_ROLE_CACHE_TTL_SECONDS` / `EMPLOYEES_CACHE_TTL_SECONDS`: tempo de cache das consultas ao Tangerino no painel (padrão: 600s / 600s / 300s). O servidor recarrega o cache sozinho em segundo plano nesse intervalo, então as telas não esperam a API
+- `TANGERINO_API_PAGE_SIZE`: quantos registros buscar por requisição no Tangerino (padrão: `1000`; se a API recusar, cai pra 200 sozinho)
+- `GOOGLE_CACHE_TTL_SECONDS`: tempo de cache das listagens do Google Workspace — usuários, grupos, licenças (padrão: `120`). Alterações feitas pelo painel limpam o cache na hora
+- `SENHA_PADRAO_AD`: senha inicial do AD que já vem preenchida na tela Criar acesso (padrão: `Unimed@196`). Na mesma tela, a caixa "Senha nunca expira" marca a conta com senha sem validade e sem troca obrigatória no 1º login (contas locais do hospital)
+- `LOG_REQUISICAO_LENTA_SEGUNDOS`: requisições do painel acima desse tempo aparecem no log como `[LENTO]` (padrão: `1`)
 
 **Consultar logs (PowerShell):**
 ```powershell

@@ -1,6 +1,7 @@
 import functools
 import json
 import os
+import time
 from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
@@ -400,19 +401,16 @@ def ferias():
     from_s = request.args.get("from", "")
     to_s = request.args.get("to", "")
     status_filter = request.args.get("status", "").strip()
-    exibir = request.args.get("exibir", "").strip().lower()
-    if exibir not in ("agora", "todos"):
-        exibir = "agora" if request.args.get("now", "1") == "1" else "todos"
-    only_now = exibir == "agora"
+    only_now = request.args.get("now") == "1"
 
     try:
         current_page = max(1, int(request.args.get("page", "1")))
     except ValueError:
         current_page = 1
     try:
-        size = max(1, min(int(request.args.get("size", "15")), 200))
+        size = max(1, min(int(request.args.get("size", "20")), 200))
     except ValueError:
-        size = 15
+        size = 20
 
     rows, has_next, total_now, erro = [], False, 0, None
     try:
@@ -428,7 +426,7 @@ def ferias():
 
     return render_template(
         "ferias.html",
-        rows=rows, from_=from_s, to_=to_s, status=status_filter, only_now=only_now, exibir=exibir,
+        rows=rows, from_=from_s, to_=to_s, status=status_filter, only_now=only_now,
         size=size, current_page=current_page, has_next_page=has_next,
         total_now=total_now, erro=erro,
         sistemas_ferias=SISTEMAS_DISPONIVEIS,
@@ -519,6 +517,7 @@ def colaboradores():
 
 
 UTC_OFFSET_HOURS = int(os.getenv("UTC_OFFSET_HOURS", "-3"))
+SENHA_PADRAO_AD = os.getenv("SENHA_PADRAO_AD", "Unimed@196")
 
 
 @painel_bp.route("/usuarios-ad")
@@ -593,8 +592,10 @@ def tela_google_workspace():
         cards["ativos"] = sum(1 for u in todos_usuarios if not u.get("suspenso"))
         cards["suspensos"] = sum(1 for u in todos_usuarios if u.get("suspenso"))
 
+        resumo = None
         try:
-            resumo_bs = next((r for r in resumo_licencas() if r["sku_id"] == SKU_BUSINESS_STARTER), None)
+            resumo = resumo_licencas()
+            resumo_bs = next((r for r in resumo if r["sku_id"] == SKU_BUSINESS_STARTER), None)
             if resumo_bs:
                 cards["business_starter_livre"] = resumo_bs["livre"]
         except Exception:
@@ -615,7 +616,7 @@ def tela_google_workspace():
         elif aba == "unidades":
             unidades = listar_unidades_organizacionais()
         elif aba == "licencas":
-            licencas = resumo_licencas()
+            licencas = resumo if resumo is not None else resumo_licencas()
     except GoogleAdminConfigError as e:
         erro = str(e)
     except Exception as e:
@@ -1065,11 +1066,22 @@ def colaboradores_novo_acesso():
     except Exception as e:
         flash(f"Não foi possível carregar as OUs do Active Directory: {e}", "erro")
 
-    if request.method == "GET":
+    grupos_google = []
+    try:
+        grupos_google = listar_grupos()
+    except Exception as e:
+        flash(f"Não foi possível carregar os grupos de email do Google: {e}", "erro")
+
+    def tela_formulario(form=None):
         return render_template(
             "novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""),
-            ous_google=ous_google, ous_ad=ous_ad,
+            form=form, ous_google=ous_google, ous_ad=ous_ad, grupos_google=grupos_google,
+            senha_padrao_ad=SENHA_PADRAO_AD,
+            grupos_selecionados=_grupos_do_formulario(form) if form else [],
         )
+
+    if request.method == "GET":
+        return tela_formulario()
 
     cpf = normalizar_cpf(request.form.get("cpf"))
     nome_completo = (request.form.get("nome_completo") or "").strip()
@@ -1079,6 +1091,9 @@ def colaboradores_novo_acesso():
     email = (request.form.get("email") or "").strip().lower()
     ou_google = (request.form.get("ou_google") or "").strip()
     ou_ad = (request.form.get("ou_ad") or "").strip()
+    senha_ad = request.form.get("senha_ad") or SENHA_PADRAO_AD
+    senha_nunca_expira = request.form.get("senha_nunca_expira") == "1"
+    grupos = _grupos_do_formulario(request.form)
 
     erros = []
     if not cpf:
@@ -1089,32 +1104,39 @@ def colaboradores_novo_acesso():
         erros.append("Nome de usuário é obrigatório.")
     if not email:
         erros.append("Email é obrigatório.")
+    if len(senha_ad) < 8:
+        erros.append("A senha do AD precisa ter pelo menos 8 caracteres.")
+    emails_grupos_validos = {g["email"].lower() for g in grupos_google}
+    if grupos_google:
+        desconhecidos = [g for g in grupos if g not in emails_grupos_validos]
+        if desconhecidos:
+            erros.append(f"Grupo(s) de email não encontrado(s): {', '.join(desconhecidos)}.")
 
     if erros:
         for erro in erros:
             flash(erro, "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
+        return tela_formulario(request.form)
 
     try:
         usuario_existente = ad_buscar_por_employee_id(cpf, UTC_OFFSET_HOURS)
     except Exception as e:
         flash(f"Não foi possível validar o CPF no Active Directory: {e}", "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
+        return tela_formulario(request.form)
 
     if usuario_existente:
         flash(f"Esse CPF já está cadastrado no AD (usuário: {usuario_existente['sam']}).", "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
+        return tela_formulario(request.form)
 
     try:
         if email_existe_no_google(email):
             flash(f"Já existe uma conta no Google Workspace com o email {email}.", "erro")
-            return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
+            return tela_formulario(request.form)
     except GoogleAdminConfigError as e:
         flash(str(e), "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
+        return tela_formulario(request.form)
     except Exception as e:
         flash(f"Não foi possível validar o email no Google Workspace: {e}", "erro")
-        return render_template("novo_acesso.html", dominio_google=os.getenv("GOOGLE_WORKSPACE_DOMAIN", ""), form=request.form, ous_google=ous_google, ous_ad=ous_ad)
+        return tela_formulario(request.form)
 
     # Confere se ha licenca Business Starter livre antes de criar o email
     # corporativo. So bloqueia quando o total e conhecido (Reseller API ou
@@ -1136,14 +1158,19 @@ def colaboradores_novo_acesso():
     primeiro_nome = partes_nome[0]
     sobrenome = partes_nome[1] if len(partes_nome) > 1 else primeiro_nome
 
-    senha_ad = gerar_senha_temporaria()
     senha_google = gerar_senha_temporaria()
 
     try:
-        ok, mensagem, _dn = criar_usuario_ad(nome_completo, setor, username, email, cpf, senha_ad, ou_destino=ou_ad or None)
-        resultado_ad = {"status": "sucesso" if ok else "erro", "mensagem": mensagem, "senha": senha_ad if ok else None}
+        ok, mensagem, _dn = criar_usuario_ad(
+            nome_completo, setor, username, email, cpf, senha_ad,
+            ou_destino=ou_ad or None, senha_nunca_expira=senha_nunca_expira,
+        )
+        resultado_ad = {
+            "status": "sucesso" if ok else "erro", "mensagem": mensagem,
+            "senha": senha_ad if ok else None, "senha_nunca_expira": senha_nunca_expira,
+        }
     except Exception as e:
-        resultado_ad = {"status": "erro", "mensagem": str(e), "senha": None}
+        resultado_ad = {"status": "erro", "mensagem": str(e), "senha": None, "senha_nunca_expira": senha_nunca_expira}
 
     try:
         if not licenca_disponivel:
@@ -1154,11 +1181,50 @@ def colaboradores_novo_acesso():
     except Exception as e:
         resultado_google = {"status": "erro", "mensagem": str(e), "senha": None}
 
+    resultado_grupos = []
+    if grupos:
+        if resultado_google["status"] == "sucesso":
+            resultado_grupos = _adicionar_aos_grupos(email, grupos)
+        else:
+            resultado_grupos = [
+                {"grupo": g, "ok": False, "mensagem": "Não adicionado: o email corporativo não foi criado."}
+                for g in grupos
+            ]
+
     return render_template(
         "novo_acesso_resultado.html",
         nome_completo=nome_completo, email=email, username=username,
         resultado_ad=resultado_ad, resultado_google=resultado_google,
+        resultado_grupos=resultado_grupos,
     )
+
+
+def _grupos_do_formulario(form):
+    vistos = []
+    for valor in form.getlist("grupos"):
+        valor = (valor or "").strip().lower()
+        if valor and valor not in vistos:
+            vistos.append(valor)
+    return vistos
+
+
+def _adicionar_aos_grupos(email, grupos):
+    """Adiciona o email recem-criado em cada grupo. O Google leva alguns
+    segundos pra enxergar a conta nova, entao tenta de novo quando a resposta
+    e 'nao encontrado'."""
+    resultados = []
+    for grupo in grupos:
+        ok, mensagem = False, ""
+        for tentativa in range(5):
+            ok, mensagem = adicionar_membro_grupo(grupo, email)
+            if ok or "já é membro" in mensagem:
+                ok = True
+                break
+            if "not found" not in mensagem.lower() and "notfound" not in mensagem.lower():
+                break
+            time.sleep(2)
+        resultados.append({"grupo": grupo, "ok": ok, "mensagem": mensagem})
+    return resultados
 
 
 @painel_bp.route("/infomed", endpoint="infomed")

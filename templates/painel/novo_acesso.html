@@ -79,6 +79,39 @@
           {% endfor %}
         </select>
       </div>
+
+      <div class="campo full">
+        <label for="busca-grupo">Adicionar a grupos de email <span style="font-weight:400; color:var(--text-muted);">(Google — opcional, pode escolher mais de um)</span></label>
+        <div class="grupos-busca">
+          <div class="grupos-busca-campo">
+            <input type="text" id="busca-grupo" placeholder="Procurar grupo pelo nome ou email" autocomplete="off">
+            <div class="grupos-sugestoes" id="grupos-sugestoes" hidden></div>
+          </div>
+          <button type="button" class="btn-secundario" id="btn-add-grupo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span>Adicionar</span>
+          </button>
+        </div>
+        <div class="grupos-tags" id="grupos-tags"></div>
+        <div id="grupos-hidden"></div>
+      </div>
+
+      <div class="divisor-form full">Conta no Active Directory</div>
+
+      <div class="campo">
+        <label for="senha_ad">Senha inicial do AD</label>
+        <input type="text" id="senha_ad" name="senha_ad" class="mono" value="{{ form.senha_ad if form else senha_padrao_ad }}" minlength="8" autocomplete="off" required>
+      </div>
+      <div class="campo">
+        <label>&nbsp;</label>
+        <label class="checkbox-item" for="senha_nunca_expira" style="font-weight:600; color:var(--text-primary);">
+          <input type="checkbox" id="senha_nunca_expira" name="senha_nunca_expira" value="1" {{ 'checked' if form and form.senha_nunca_expira == '1' }}>
+          Senha nunca expira
+        </label>
+      </div>
+      <div class="campo full">
+        <div id="dica-senha" class="dica-senha"></div>
+      </div>
     </div>
 
     <div class="form-footer">
@@ -91,6 +124,136 @@
 {% block scripts %}
 <script>
   const dominioGoogle = "{{ dominio_google }}";
+  const gruposDisponiveis = {{ grupos_google|tojson }};
+  let gruposSelecionados = {{ grupos_selecionados|tojson }};
+  let indiceSugestao = -1;
+
+  const campoBuscaGrupo = document.getElementById('busca-grupo');
+  const caixaSugestoes = document.getElementById('grupos-sugestoes');
+
+  function normalizar(texto) {
+    return (texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  }
+
+  function grupoPorEmail(email) {
+    return gruposDisponiveis.find(g => g.email.toLowerCase() === email);
+  }
+
+  function sugestoesPara(termo) {
+    const t = normalizar(termo);
+    return gruposDisponiveis
+      .filter(g => !gruposSelecionados.includes(g.email.toLowerCase()))
+      .filter(g => !t || normalizar(g.nome).includes(t) || normalizar(g.email).includes(t))
+      .slice(0, 8);
+  }
+
+  function mostrarSugestoes() {
+    const lista = sugestoesPara(campoBuscaGrupo.value);
+    caixaSugestoes.innerHTML = '';
+    indiceSugestao = -1;
+    if (!lista.length) {
+      const vazio = document.createElement('div');
+      vazio.className = 'grupo-sugestao-vazia';
+      vazio.textContent = gruposDisponiveis.length ? 'Nenhum grupo encontrado.' : 'Grupos do Google indisponíveis.';
+      caixaSugestoes.appendChild(vazio);
+    }
+    lista.forEach(g => {
+      const item = document.createElement('div');
+      item.className = 'grupo-sugestao';
+      item.dataset.email = g.email.toLowerCase();
+      const nome = document.createElement('strong');
+      nome.textContent = g.nome || g.email;
+      const email = document.createElement('span');
+      email.textContent = g.email;
+      item.append(nome, email);
+      item.addEventListener('mousedown', ev => { ev.preventDefault(); adicionarGrupo(item.dataset.email); });
+      caixaSugestoes.appendChild(item);
+    });
+    caixaSugestoes.hidden = false;
+  }
+
+  function destacarSugestao(novoIndice) {
+    const itens = caixaSugestoes.querySelectorAll('.grupo-sugestao');
+    if (!itens.length) return;
+    indiceSugestao = (novoIndice + itens.length) % itens.length;
+    itens.forEach((el, i) => el.classList.toggle('ativa', i === indiceSugestao));
+    itens[indiceSugestao].scrollIntoView({ block: 'nearest' });
+  }
+
+  function adicionarGrupo(email) {
+    email = (email || '').toLowerCase();
+    if (!email || gruposSelecionados.includes(email) || !grupoPorEmail(email)) return;
+    gruposSelecionados.push(email);
+    campoBuscaGrupo.value = '';
+    caixaSugestoes.hidden = true;
+    renderizarGrupos();
+    campoBuscaGrupo.focus();
+  }
+
+  function adicionarPeloCampo() {
+    const termo = normalizar(campoBuscaGrupo.value);
+    const itens = caixaSugestoes.querySelectorAll('.grupo-sugestao');
+    if (!caixaSugestoes.hidden && indiceSugestao >= 0 && itens[indiceSugestao]) {
+      return adicionarGrupo(itens[indiceSugestao].dataset.email);
+    }
+    if (!termo) { mostrarSugestoes(); return; }
+    const exato = gruposDisponiveis.find(g => normalizar(g.email) === termo || normalizar(g.nome) === termo);
+    const escolhido = exato || sugestoesPara(campoBuscaGrupo.value)[0];
+    if (!escolhido) { mostrarToast('Nenhum grupo de email encontrado com esse nome.', 'erro'); return; }
+    adicionarGrupo(escolhido.email);
+  }
+
+  function renderizarGrupos() {
+    const tags = document.getElementById('grupos-tags');
+    const ocultos = document.getElementById('grupos-hidden');
+    tags.innerHTML = '';
+    ocultos.innerHTML = '';
+    gruposSelecionados.forEach(email => {
+      const g = grupoPorEmail(email) || { nome: email, email };
+      const tag = document.createElement('span');
+      tag.className = 'tag-grupo';
+      tag.title = g.email;
+      const texto = document.createElement('span');
+      texto.textContent = g.nome || g.email;
+      const remover = document.createElement('button');
+      remover.type = 'button';
+      remover.setAttribute('aria-label', `Remover ${g.nome || g.email}`);
+      remover.innerHTML = '&times;';
+      remover.addEventListener('click', () => {
+        gruposSelecionados = gruposSelecionados.filter(e => e !== email);
+        renderizarGrupos();
+      });
+      tag.append(texto, remover);
+      tags.appendChild(tag);
+
+      const oculto = document.createElement('input');
+      oculto.type = 'hidden';
+      oculto.name = 'grupos';
+      oculto.value = email;
+      ocultos.appendChild(oculto);
+    });
+  }
+
+  campoBuscaGrupo.addEventListener('input', mostrarSugestoes);
+  campoBuscaGrupo.addEventListener('focus', mostrarSugestoes);
+  campoBuscaGrupo.addEventListener('blur', () => setTimeout(() => { caixaSugestoes.hidden = true; }, 120));
+  campoBuscaGrupo.addEventListener('keydown', ev => {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); if (caixaSugestoes.hidden) mostrarSugestoes(); destacarSugestao(indiceSugestao + 1); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); destacarSugestao(indiceSugestao - 1); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); adicionarPeloCampo(); }
+    else if (ev.key === 'Escape') { caixaSugestoes.hidden = true; }
+  });
+  document.getElementById('btn-add-grupo').addEventListener('click', adicionarPeloCampo);
+  renderizarGrupos();
+
+  const caixaNuncaExpira = document.getElementById('senha_nunca_expira');
+  function atualizarDicaSenha() {
+    document.getElementById('dica-senha').textContent = caixaNuncaExpira.checked
+      ? 'Senha nunca expira: o colaborador entra com essa senha e não precisa trocá-la (indicado para o hospital, onde a conta é local e não dá pra trocar a senha do AD).'
+      : 'Senha com validade: troca obrigatória no 1º login e expira conforme a política do domínio (indicado para a operadora).';
+  }
+  caixaNuncaExpira.addEventListener('change', atualizarDicaSenha);
+  atualizarDicaSenha();
   let toastBuscaCpf = null;
   let toastEmail = null;
 
