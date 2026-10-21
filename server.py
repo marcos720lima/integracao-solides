@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
+from ldap3 import NONE, Connection, MODIFY_REPLACE, Server
 from ldap3.utils.conv import escape_filter_chars
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CollectorRegistry, CONTENT_TYPE_LATEST
 from google_admin import inativar_email_google_workspace
@@ -250,6 +250,42 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 from painel import painel_bp  # noqa: E402
 app.register_blueprint(painel_bp)
 
+import time as _time  # noqa: E402
+from flask import g  # noqa: E402
+
+LIMITE_REQUISICAO_LENTA = float(os.getenv('LOG_REQUISICAO_LENTA_SEGUNDOS', '1'))
+
+
+def _iniciar_tarefas_de_fundo():
+    """Mantem o cache do Tangerino sempre atualizado em segundo plano. So roda
+    no servidor web (os scripts que importam este arquivo, como o
+    inativar_manual.py, nao disparam)."""
+    try:
+        from painel.tangerino import iniciar_atualizacao_periodica
+        iniciar_atualizacao_periodica()
+    except Exception as e:
+        logger.warning(f"[CACHE] Não foi possível iniciar a atualização do Tangerino: {e}")
+
+
+@app.before_request
+def _antes_da_requisicao():
+    g._inicio_requisicao = _time.perf_counter()
+    _iniciar_tarefas_de_fundo()
+
+
+@app.after_request
+def _registrar_requisicao_lenta(resposta):
+    inicio = getattr(g, '_inicio_requisicao', None)
+    if inicio is not None:
+        duracao = _time.perf_counter() - inicio
+        if duracao > LIMITE_REQUISICAO_LENTA:
+            logger.warning(f"[LENTO] {request.method} {request.path} {duracao:.1f}s")
+    return resposta
+
+
+if any('waitress' in (arg or '') for arg in sys.argv[:1]):
+    _iniciar_tarefas_de_fundo()
+
 from painel.webhooks import registrar_webhook_recebido, marcar_webhook_concluido  # noqa: E402
 
 
@@ -418,7 +454,7 @@ def _interpretar_resultado_rpa(process, nome):
 
 def _criar_conexao_ad():
     """Cria e retorna uma conexão com o Active Directory."""
-    server = Server(AD_URL, get_info=ALL, use_ssl=True)
+    server = Server(AD_URL, get_info=NONE, use_ssl=True, connect_timeout=5)
     return Connection(
         server,
         user=AD_USER,
@@ -572,7 +608,7 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
         )
         
         msg = MIMEMultipart('related')
-        msg['Subject'] = f"NOTIFICAÇÃO: Desativação de Colaborador - {nome_colaborador}"
+        msg['Subject'] = f"NOTIFICAÇÃO: Desativação de Acessos - {nome_colaborador}"
         msg['From'] = EMAIL_CONFIG['username']
         msg['To'] = ', '.join(TI_EMAILS)
 
@@ -694,7 +730,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
             <div class="cabecalho">
                 <img src="cid:logo_unimed" alt="Unimed Oeste do Pará">
             </div>
-            <div class="corpo">        
+            <div class="corpo">          
             <h3>Informações do Colaborador</h3>
             <div class="info-box">
                 <table>

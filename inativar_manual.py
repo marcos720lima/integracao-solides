@@ -113,7 +113,7 @@ SISTEMAS = {
 def definir_ativo_ad(cpf, ativar):
     """Ativa ou desativa usuário no Active Directory."""
     try:
-        from ldap3 import ALL, Connection, MODIFY_REPLACE, Server
+        from ldap3 import NONE, Connection, MODIFY_REPLACE, Server
         from ldap3.utils.conv import escape_filter_chars
         
         AD_URL = os.getenv('AD_URL')
@@ -123,7 +123,7 @@ def definir_ativo_ad(cpf, ativar):
         
         print_info(f"Conectando ao AD: {AD_URL}")
         
-        server = Server(AD_URL, get_info=ALL, use_ssl=True)
+        server = Server(AD_URL, get_info=NONE, use_ssl=True, connect_timeout=5)
         conn = Connection(server, user=AD_USER, password=AD_PASS, auto_bind=True)
         
         print_sucesso("Conectado ao AD")

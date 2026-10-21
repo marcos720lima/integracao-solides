@@ -139,6 +139,11 @@ def inativar_email_google_workspace(email: str | None) -> dict:
 
     try:
         service.users().patch(userKey=email, body={"suspended": True}).execute()
+        try:
+            from painel.google_workspace import invalidar_cache_google
+            invalidar_cache_google()
+        except Exception:
+            pass
         return {
             "sistema": nome_sistema, "status": "sucesso",
             "grupos_removidos": grupos_removidos, "grupos_total": grupos_total,

@@ -92,7 +92,7 @@ O servidor (`server.py`, via Waitress) e o `ngrok` sobem juntos, disparados pelo
 | **Disparadores** | **Dois gatilhos**: ao fazer **logon** do usuário `Administrador`, **e** `AtStartup` (na inicialização da VM). Os dois coexistem — cobre tanto o caso de alguém logar quanto o de a VM reiniciar sozinha (update do Windows, queda de energia, manutenção do Proxmox) sem ninguém entrar na tela |
 | **Ações** | Programa: `C:\IntegracaoSolides\iniciar_servidor_vm.bat` |
 
-O `.bat` abre duas janelas destacadas (`start "" cmd /c ...`): uma com `python -m waitress --host=0.0.0.0 --port=3000 server:app`, outra com `ngrok http 3000`. Por rodarem via Tarefa Agendada (Sessão 0 do Windows), essas janelas **não aparecem** na área de trabalho mesmo com o processo ativo — não estranhe não ver nada na tela depois de ligar a VM; é esperado.
+O `.bat` abre duas janelas destacadas (`start "" cmd /c ...`): uma com `python -m waitress --host=0.0.0.0 --port=3000 --threads=16 server:app`, outra com `ngrok http 3000`. Por rodarem via Tarefa Agendada (Sessão 0 do Windows), essas janelas **não aparecem** na área de trabalho mesmo com o processo ativo — não estranhe não ver nada na tela depois de ligar a VM; é esperado.
 
 > **Nunca rode `iniciar_servidor_vm.bat` manualmente enquanto essa tarefa existir.** Isso abriria um segundo processo de `ngrok`, e contas gratuitas só permitem uma sessão de túnel simultânea — a segunda tentativa falha com `ERR_NGROK_108`, e a URL pública que aparecer pode não ser a que está de fato recebendo o tráfego configurado no Solides.
 

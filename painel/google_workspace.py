@@ -1,10 +1,43 @@
 import os
+import threading
+import time
 
 from google_admin import GoogleAdminConfigError, obter_service_admin, obter_service_licensing, obter_service_reseller
 
 LIMITE_PAGINAS_SEGURANCA = 25
 PRODUTO_WORKSPACE = "Google-Apps"
 SKU_BUSINESS_STARTER = "1010020027"
+
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _ttl_cache():
+    try:
+        return max(0, int(os.getenv("GOOGLE_CACHE_TTL_SECONDS", "120")))
+    except ValueError:
+        return 120
+
+
+def _cacheado(chave, carregar, ttl=None):
+    """Guarda por alguns minutos o resultado das listagens (usuarios, grupos,
+    OUs, licencas), pra tela nao refazer 10+ chamadas ao Google a cada clique.
+    Qualquer alteracao feita pelo painel limpa o cache (invalidar_cache_google)."""
+    ttl = _ttl_cache() if ttl is None else ttl
+    agora = time.time()
+    with _cache_lock:
+        item = _cache.get(chave)
+        if item and item[0] > agora:
+            return item[1]
+    valor = carregar()
+    with _cache_lock:
+        _cache[chave] = (agora + ttl, valor)
+    return valor
+
+
+def invalidar_cache_google():
+    with _cache_lock:
+        _cache.clear()
 
 
 def _sem_login_registrado(valor):
@@ -52,6 +85,12 @@ def _corresponde_ao_termo(usuario, palavras):
 
 
 def listar_usuarios(query=None, max_resultados=500):
+    if not query:
+        return list(_cacheado(("usuarios", max_resultados), lambda: _listar_usuarios(None, max_resultados)))
+    return _listar_usuarios(query, max_resultados)
+
+
+def _listar_usuarios(query, max_resultados):
     service = obter_service_admin()
 
     base = {"customer": "my_customer", "maxResults": min(max_resultados, 500), "orderBy": "givenName"}
@@ -105,6 +144,10 @@ def _coletar_usuarios(service, parametros, palavras_filtro, max_resultados):
 
 
 def listar_grupos(max_resultados=500):
+    return list(_cacheado(("grupos", max_resultados), lambda: _listar_grupos(max_resultados)))
+
+
+def _listar_grupos(max_resultados):
     service = obter_service_admin()
 
     parametros = {"customer": "my_customer", "maxResults": min(max_resultados, 200)}
@@ -166,6 +209,7 @@ def listar_membros_grupo(email_grupo):
 def criar_grupo(email_grupo, nome, descricao=""):
     from googleapiclient.errors import HttpError
 
+    invalidar_cache_google()
     service = obter_service_admin()
     corpo = {"email": email_grupo, "name": nome}
     if descricao:
@@ -182,6 +226,7 @@ def criar_grupo(email_grupo, nome, descricao=""):
 def adicionar_membro_grupo(email_grupo, email_membro, papel="MEMBER"):
     from googleapiclient.errors import HttpError
 
+    invalidar_cache_google()
     service = obter_service_admin()
     try:
         service.members().insert(
@@ -198,6 +243,7 @@ def adicionar_membro_grupo(email_grupo, email_membro, papel="MEMBER"):
 def remover_membro_grupo(email_grupo, email_membro):
     from googleapiclient.errors import HttpError
 
+    invalidar_cache_google()
     service = obter_service_admin()
     try:
         service.members().delete(groupKey=email_grupo, memberKey=email_membro).execute()
@@ -284,6 +330,10 @@ def obter_usuario_detalhado(email):
 
 
 def listar_atribuicoes_de_licenca():
+    return list(_cacheado("atribuicoes_licenca", _listar_atribuicoes_de_licenca))
+
+
+def _listar_atribuicoes_de_licenca():
     """Busca, de uma vez, todas as atribuicoes de licenca do Workspace
     (qualquer SKU) via Enterprise License Manager API. A propria API ja
     devolve o nome amigavel de cada SKU (skuName), entao nao precisa mapear
@@ -350,29 +400,41 @@ def _total_configurado_manualmente(sku_id):
     return None
 
 
+def _assinaturas_reseller():
+    """Lista de assinaturas via Reseller API (ou None se a API nao responder).
+    Cacheada: as duas SKUs usam a mesma chamada, e uma falha tambem fica
+    guardada pra nao tentar de novo a cada tela."""
+    def carregar():
+        dominio = os.getenv("GOOGLE_WORKSPACE_DOMAIN", "").strip()
+        if not dominio:
+            return None
+        try:
+            service = obter_service_reseller()
+            resposta = service.subscriptions().list(customerId=dominio).execute()
+            return resposta.get("subscriptions", [])
+        except Exception:
+            return None
+    return _cacheado("assinaturas_reseller", carregar, ttl=max(_ttl_cache(), 600))
+
+
 def _total_via_reseller(sku_id):
     """Total contratado via Reseller API. Usa o teto da assinatura
     (maximumNumberOfSeats no plano FLEXIBLE, numberOfSeats nos anuais) -
     nunca licensedNumberOfSeats, que e a quantidade atribuida (uso)."""
-    dominio = os.getenv("GOOGLE_WORKSPACE_DOMAIN", "").strip()
-    if not dominio:
-        return None
-    try:
-        service = obter_service_reseller()
-        resposta = service.subscriptions().list(customerId=dominio).execute()
-        for assinatura in resposta.get("subscriptions", []):
-            if assinatura.get("skuId") != sku_id:
-                continue
-            seats = assinatura.get("seats", {})
-            plano = assinatura.get("plan", {}).get("planName", "")
-            if plano == "FLEXIBLE":
-                total = seats.get("maximumNumberOfSeats")
-            else:
-                total = seats.get("numberOfSeats")
-            if total is not None:
+    for assinatura in _assinaturas_reseller() or []:
+        if assinatura.get("skuId") != sku_id:
+            continue
+        seats = assinatura.get("seats", {})
+        plano = assinatura.get("plan", {}).get("planName", "")
+        if plano == "FLEXIBLE":
+            total = seats.get("maximumNumberOfSeats")
+        else:
+            total = seats.get("numberOfSeats")
+        if total is not None:
+            try:
                 return int(total)
-    except Exception:
-        return None
+            except (TypeError, ValueError):
+                return None
     return None
 
 
@@ -427,6 +489,10 @@ def obter_licenca_do_usuario(email):
 
 
 def listar_unidades_organizacionais():
+    return list(_cacheado("unidades", _listar_unidades_organizacionais, ttl=max(_ttl_cache(), 600)))
+
+
+def _listar_unidades_organizacionais():
     service = obter_service_admin()
     resposta = service.orgunits().list(customerId="my_customer", type="all").execute()
 
@@ -468,6 +534,7 @@ def obter_status_google(email):
 
 
 def criar_usuario_google(nome, sobrenome, email, senha, cargo=None, departamento=None, unidade_organizacional=None):
+    invalidar_cache_google()
     service = obter_service_admin()
 
     corpo = {

@@ -10,7 +10,7 @@ set RODANDO=0
 for /f %%N in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*waitress*' } | Measure-Object).Count"') do set RODANDO=%%N
 if "%RODANDO%"=="0" (
     echo Iniciando servidor ^(Waitress - producao^) em nova janela...
-    start "" cmd /c "cd /d %~dp0 && python -m waitress --host=0.0.0.0 --port=3000 server:app"
+    start "" cmd /c "cd /d %~dp0 && python -m waitress --host=0.0.0.0 --port=3000 --threads=16 server:app"
 ) else (
     echo Servidor ja esta rodando ^(%RODANDO% processo^(s^)^) - nao vou abrir outro.
 )

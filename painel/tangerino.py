@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -18,16 +19,25 @@ DEFAULT_RETRY_TOTAL = 3
 DEFAULT_RETRY_BACKOFF = 1.0
 DEFAULT_WORKPLACE_CACHE_TTL_SECONDS = 600
 DEFAULT_JOB_ROLE_CACHE_TTL_SECONDS = 600
-DEFAULT_EMPLOYEES_CACHE_TTL_SECONDS = 90
+DEFAULT_EMPLOYEES_CACHE_TTL_SECONDS = 300
+DEFAULT_API_PAGE_SIZE = 1000
+PAGE_SIZE_RESERVA = 200
+IDADE_MAXIMA_DADO_ANTIGO = 1800
 LOCAL_TZ = timezone(timedelta(hours=-3))
 
-WORKPLACE_CACHE = {"expires_at": 0.0, "name_map": {}}
-JOB_ROLE_CACHE = {"expires_at": 0.0, "name_map": {}}
+WORKPLACE_CACHE = {"expires_at": 0.0, "carregado_em": 0.0, "name_map": {}}
+JOB_ROLE_CACHE = {"expires_at": 0.0, "carregado_em": 0.0, "name_map": {}}
 EMPLOYEES_CACHE = {
-    "ativos": {"expires_at": 0.0, "itens": []},
-    "demitidos": {"expires_at": 0.0, "itens": []},
+    "ativos": {"expires_at": 0.0, "carregado_em": 0.0, "itens": []},
+    "demitidos": {"expires_at": 0.0, "carregado_em": 0.0, "itens": []},
 }
-VACATION_CACHE = {"expires_at": 0.0, "itens": []}
+VACATION_CACHE = {"expires_at": 0.0, "carregado_em": 0.0, "itens": []}
+
+_travas_cache = {}
+_travas_guarda = threading.Lock()
+_atualizando = set()
+_sessao_compartilhada = None
+_atualizacao_periodica_iniciada = False
 
 
 class TangerinoConfigError(Exception):
@@ -66,7 +76,7 @@ def get_timeout() -> tuple:
     )
 
 
-def build_http_session() -> requests.Session:
+def _criar_sessao_http() -> requests.Session:
     retries = Retry(
         total=_get_int_env("TANGERINO_RETRY_TOTAL", DEFAULT_RETRY_TOTAL),
         backoff_factor=_get_float_env("TANGERINO_RETRY_BACKOFF", DEFAULT_RETRY_BACKOFF),
@@ -79,6 +89,83 @@ def build_http_session() -> requests.Session:
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     return session
+
+
+def build_http_session() -> requests.Session:
+    """Sessao HTTP unica reaproveitada pelo modulo todo: mantem a conexao TLS
+    com o Tangerino aberta entre requisicoes em vez de refazer o handshake."""
+    global _sessao_compartilhada
+    if _sessao_compartilhada is None:
+        with _travas_guarda:
+            if _sessao_compartilhada is None:
+                _sessao_compartilhada = _criar_sessao_http()
+    return _sessao_compartilhada
+
+
+def _trava_do_cache(nome):
+    with _travas_guarda:
+        return _travas_cache.setdefault(nome, threading.Lock())
+
+
+def _gravar_cache(cache, campo, valor, ttl):
+    agora = time.time()
+    cache[campo] = valor
+    cache["carregado_em"] = agora
+    cache["expires_at"] = agora + ttl
+
+
+def _atualizar_em_segundo_plano(nome, cache, campo, carregar, ttl):
+    with _travas_guarda:
+        if nome in _atualizando:
+            return
+        _atualizando.add(nome)
+
+    def tarefa():
+        try:
+            with _trava_do_cache(nome):
+                _gravar_cache(cache, campo, carregar(), ttl)
+        except Exception as e:
+            print(f"[Tangerino] Falha ao atualizar o cache '{nome}' em segundo plano: {e}")
+        finally:
+            with _travas_guarda:
+                _atualizando.discard(nome)
+
+    threading.Thread(target=tarefa, daemon=True).start()
+
+
+def _cache_obter(nome, cache, campo, carregar, ttl, forcar=False):
+    """Cache com trava e atualizacao em segundo plano.
+
+    - Dado valido: devolve na hora.
+    - Dado vencido (mas recente): devolve o antigo na hora e atualiza em
+      segundo plano, pra ninguem ficar esperando a API.
+    - Sem dado, dado velho demais ou forcar=True: busca agora, com trava,
+      pra que varias telas abertas ao mesmo tempo facam uma busca so.
+    """
+    agora = time.time()
+    valor = cache[campo]
+
+    if not forcar and valor:
+        if cache["expires_at"] > agora:
+            return valor
+        if agora - cache["carregado_em"] < IDADE_MAXIMA_DADO_ANTIGO:
+            _atualizar_em_segundo_plano(nome, cache, campo, carregar, ttl)
+            return valor
+
+    pedido_em = time.time()
+    with _trava_do_cache(nome):
+        # outra thread pode ter carregado enquanto esta esperava a trava
+        if cache[campo] and cache["carregado_em"] >= pedido_em:
+            return cache[campo]
+        if not forcar and cache[campo] and cache["expires_at"] > time.time():
+            return cache[campo]
+        novo = carregar()
+        _gravar_cache(cache, campo, novo, ttl)
+        return novo
+
+
+def _tamanho_pagina_api():
+    return max(1, _get_int_env("TANGERINO_API_PAGE_SIZE", DEFAULT_API_PAGE_SIZE))
 
 
 def ms_to_local_str(ms: int) -> str:
@@ -178,26 +265,21 @@ def get_employees_cache_ttl_seconds() -> int:
     return max(15, _get_int_env("EMPLOYEES_CACHE_TTL_SECONDS", DEFAULT_EMPLOYEES_CACHE_TTL_SECONDS))
 
 
-def _buscar_employees_por_particao_cacheado(session, headers, timeout, show_fired_flag, api_page_size=200):
+def _buscar_employees_por_particao_cacheado(session, headers, timeout, show_fired_flag, api_page_size=200, forcar=False):
     chave = "demitidos" if show_fired_flag == 1 else "ativos"
-    cache = EMPLOYEES_CACHE[chave]
-    now = time.time()
-
-    if cache["itens"] and cache["expires_at"] > now:
-        return cache["itens"]
-
-    itens = _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, api_page_size)
-    cache["itens"] = itens
-    cache["expires_at"] = now + get_employees_cache_ttl_seconds()
-    return itens
+    return _cache_obter(
+        f"employees_{chave}", EMPLOYEES_CACHE[chave], "itens",
+        lambda: _buscar_employees_por_particao(session, headers, timeout, show_fired_flag, api_page_size),
+        get_employees_cache_ttl_seconds(), forcar,
+    )
 
 
-def buscar_todos_employees_brutos(session, headers, timeout, api_page_size=200, incluir_demitidos=True):
-    ativos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 0, api_page_size)
+def buscar_todos_employees_brutos(session, headers, timeout, api_page_size=200, incluir_demitidos=True, forcar=False):
+    ativos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 0, api_page_size, forcar)
     if not incluir_demitidos:
         return ativos
 
-    demitidos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 1, api_page_size)
+    demitidos = _buscar_employees_por_particao_cacheado(session, headers, timeout, 1, api_page_size, forcar)
     vistos = {emp.get("id") for emp in ativos if isinstance(emp.get("id"), int)}
     combinados = list(ativos)
     for emp in demitidos:
@@ -277,6 +359,11 @@ def _paginar_tudo(session, url, headers, timeout, params_base, api_page_size, ch
     if chave_dedup is None:
         chave_dedup = lambda item: item.get("id")
 
+    # Ignora o tamanho de pagina da tela: busca em lotes grandes (padrao
+    # 1000, TANGERINO_API_PAGE_SIZE no .env) pra trazer tudo em poucas
+    # requisicoes. Se a API recusar o tamanho, cai pra 200.
+    api_page_size = _tamanho_pagina_api()
+
     itens = []
     vistos = set()
     numeros_vistos = set()
@@ -287,7 +374,14 @@ def _paginar_tudo(session, url, headers, timeout, params_base, api_page_size, ch
     while True:
         params = dict(params_base)
         params.update({"page": page, "size": api_page_size})
-        lote, total_pages_encontrado, meta = _fetch_page_com_meta(session, url, headers, timeout, params)
+        try:
+            lote, total_pages_encontrado, meta = _fetch_page_com_meta(session, url, headers, timeout, params)
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if primeira_requisicao and status == 400 and api_page_size > PAGE_SIZE_RESERVA:
+                api_page_size = PAGE_SIZE_RESERVA
+                continue
+            raise
 
         if total_pages is None:
             total_pages = total_pages_encontrado
@@ -336,33 +430,23 @@ def _fetch_all_pages(session, url, headers, timeout, api_page_size):
     return _paginar_tudo(session, url, headers, timeout, {}, api_page_size)
 
 
-def get_workplace_name_map_cached(session, headers, timeout, api_page_size) -> dict:
-    now = time.time()
-    if WORKPLACE_CACHE["name_map"] and WORKPLACE_CACHE["expires_at"] > now:
-        return WORKPLACE_CACHE["name_map"]
-
-    name_map = build_workplace_name_map(_fetch_all_pages(session, WORKPLACE_API_URL, headers, timeout, api_page_size))
-    WORKPLACE_CACHE["name_map"] = name_map
-    WORKPLACE_CACHE["expires_at"] = now + get_workplace_cache_ttl_seconds()
-    return name_map
+def get_workplace_name_map_cached(session, headers, timeout, api_page_size, forcar=False) -> dict:
+    return _cache_obter(
+        "workplaces", WORKPLACE_CACHE, "name_map",
+        lambda: build_workplace_name_map(_fetch_all_pages(session, WORKPLACE_API_URL, headers, timeout, api_page_size)),
+        get_workplace_cache_ttl_seconds(), forcar,
+    )
 
 
-def get_job_role_name_map_cached(session, headers, timeout, api_page_size) -> dict:
-    now = time.time()
-    if JOB_ROLE_CACHE["name_map"] and JOB_ROLE_CACHE["expires_at"] > now:
-        return JOB_ROLE_CACHE["name_map"]
-
-    name_map = build_job_role_name_map(_fetch_all_pages(session, JOB_ROLE_API_URL, headers, timeout, api_page_size))
-    JOB_ROLE_CACHE["name_map"] = name_map
-    JOB_ROLE_CACHE["expires_at"] = now + get_job_role_cache_ttl_seconds()
-    return name_map
+def get_job_role_name_map_cached(session, headers, timeout, api_page_size, forcar=False) -> dict:
+    return _cache_obter(
+        "job_roles", JOB_ROLE_CACHE, "name_map",
+        lambda: build_job_role_name_map(_fetch_all_pages(session, JOB_ROLE_API_URL, headers, timeout, api_page_size)),
+        get_job_role_cache_ttl_seconds(), forcar,
+    )
 
 
-def _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_size=200):
-    now = time.time()
-    if VACATION_CACHE["itens"] and VACATION_CACHE["expires_at"] > now:
-        return VACATION_CACHE["itens"]
-
+def _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_size=200, forcar=False):
     def chave_ferias(it):
         chave = it.get("id")
         if chave is None:
@@ -370,13 +454,51 @@ def _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, api_page_si
             chave = (emp.get("id") or emp.get("email") or emp.get("name"), it.get("startDate"), it.get("endDate"), it.get("status"))
         return chave
 
-    resultado = _paginar_tudo(
-        session, ADJUSTMENT_API_URL, headers, timeout,
-        {"adjustmentReasonId": 1}, api_page_size, chave_dedup=chave_ferias,
+    return _cache_obter(
+        "ferias", VACATION_CACHE, "itens",
+        lambda: _paginar_tudo(
+            session, ADJUSTMENT_API_URL, headers, timeout,
+            {"adjustmentReasonId": 1}, api_page_size, chave_dedup=chave_ferias,
+        ),
+        get_employees_cache_ttl_seconds(), forcar,
     )
-    VACATION_CACHE["itens"] = resultado
-    VACATION_CACHE["expires_at"] = now + get_employees_cache_ttl_seconds()
-    return resultado
+
+
+def atualizar_todos_os_caches():
+    """Recarrega tudo de uma vez (colaboradores, setores, cargos, ferias)."""
+    headers = get_headers_from_env()
+    session = build_http_session()
+    timeout = get_timeout()
+    tamanho = _tamanho_pagina_api()
+    get_workplace_name_map_cached(session, headers, timeout, tamanho, forcar=True)
+    get_job_role_name_map_cached(session, headers, timeout, tamanho, forcar=True)
+    buscar_todos_employees_brutos(session, headers, timeout, tamanho, incluir_demitidos=True, forcar=True)
+    _buscar_todos_ajustes_ferias_cacheado(session, headers, timeout, tamanho, forcar=True)
+
+
+def iniciar_atualizacao_periodica():
+    """Mantem o cache sempre quente: carrega tudo assim que o servidor sobe e
+    recarrega a cada EMPLOYEES_CACHE_TTL_SECONDS. Assim nenhuma tela precisa
+    esperar a API do Tangerino. Chamada uma vez pelo server.py."""
+    global _atualizacao_periodica_iniciada
+    with _travas_guarda:
+        if _atualizacao_periodica_iniciada:
+            return
+        _atualizacao_periodica_iniciada = True
+
+    def laco():
+        while True:
+            inicio = time.time()
+            try:
+                atualizar_todos_os_caches()
+                print(f"[Tangerino] Cache atualizado em {time.time() - inicio:.1f}s")
+            except TangerinoConfigError:
+                return
+            except Exception as e:
+                print(f"[Tangerino] Falha ao atualizar o cache: {e}")
+            time.sleep(get_employees_cache_ttl_seconds())
+
+    threading.Thread(target=laco, daemon=True, name="tangerino-cache").start()
 
 
 def fetch_vacation_rows_page(from_d, to_d, status_filter, only_now, ui_page, ui_page_size, api_page_size):
@@ -642,11 +764,14 @@ def buscar_colaborador_por_cpf(cpf_busca, api_page_size=200):
     session = build_http_session()
     timeout = get_timeout()
 
-    brutos = buscar_todos_employees_brutos(session, headers, timeout, api_page_size, incluir_demitidos=True)
-
-    for emp in brutos:
-        cpf_emp = normalizar_cpf(get_first_present(emp, ("cpf", "cpfNumber", "documento", "numeroCpf", "docNumber")))
-        if cpf_emp and cpf_emp == cpf_normalizado:
-            return _extrair_colaborador_da_listagem(emp, session, headers, timeout, api_page_size)
+    # Primeiro procura no cache; se nao achar (ex.: colaborador cadastrado
+    # agora ha pouco no Tangerino), busca de novo direto na API antes de
+    # dizer que nao existe.
+    for forcar in (False, True):
+        brutos = buscar_todos_employees_brutos(session, headers, timeout, api_page_size, incluir_demitidos=True, forcar=forcar)
+        for emp in brutos:
+            cpf_emp = normalizar_cpf(get_first_present(emp, ("cpf", "cpfNumber", "documento", "numeroCpf", "docNumber")))
+            if cpf_emp and cpf_emp == cpf_normalizado:
+                return _extrair_colaborador_da_listagem(emp, session, headers, timeout, api_page_size)
 
     return None

@@ -1,7 +1,7 @@
 import re
 from typing import Dict, List, Optional, Tuple
 
-from ldap3 import ALL, MODIFY_REPLACE, SUBTREE, Connection, Server
+from ldap3 import MODIFY_REPLACE, NONE, SUBTREE, Connection, Server
 
 DAYS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
 DAY_INPUTS = [
@@ -17,8 +17,10 @@ DAY_INPUTS = [
 
 def _conexao_ad():
     from server import AD_URL, AD_USER, AD_PASS, BASE_DN
-    servidor = Server(AD_URL, get_info=ALL)
-    conexao = Connection(servidor, user=AD_USER, password=AD_PASS, auto_bind=True)
+    # get_info=NONE: nao baixa o schema inteiro do AD a cada conexao
+    # (era o que deixava cada operacao 1-3s mais lenta)
+    servidor = Server(AD_URL, get_info=NONE, connect_timeout=5)
+    conexao = Connection(servidor, user=AD_USER, password=AD_PASS, auto_bind=True, receive_timeout=30)
     return conexao, BASE_DN
 
 
@@ -64,6 +66,10 @@ def decode_logon_hours(logon_hours_raw, utc_offset_hours: int) -> Dict[str, str]
         return {"*": "Sem restrição"}
 
     raw = logon_hours_raw[0] if isinstance(logon_hours_raw, (list, tuple)) else logon_hours_raw
+    if isinstance(raw, str):
+        # sem schema, o ldap3 entrega como texto quando os bytes sao UTF-8
+        # validos (ex.: tudo zero = sem acesso nenhum); volta pra bytes
+        raw = raw.encode("utf-8")
     if not isinstance(raw, (bytes, bytearray)):
         return {"!": "Formato inesperado"}
 
@@ -497,7 +503,7 @@ def listar_ous_ad():
     return unidades
 
 
-def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha, ou_destino=None):
+def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha, ou_destino=None, senha_nunca_expira=False):
     import os
 
     ou_destino = (ou_destino or "").strip() or os.getenv("AD_OU_NOVOS_USUARIOS", "").strip()
@@ -525,6 +531,7 @@ def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha, ou_desti
         "employeeID": cpf,
         "userAccountControl": 514,
     }
+    atributos = {chave: valor for chave, valor in atributos.items() if valor not in ("", None)}
 
     ok = conn.add(dn, attributes=atributos)
     if not ok:
@@ -539,8 +546,15 @@ def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha, ou_desti
         conn.unbind()
         return False, motivo, dn
 
-    conn.modify(dn, {"pwdLastSet": [(MODIFY_REPLACE, [0])]})
-    ok_habilitar = conn.modify(dn, {"userAccountControl": [(MODIFY_REPLACE, [512])]})
+    # 512 = conta normal ativa; +65536 = "A senha nunca expira".
+    # Com senha que nunca expira nao forca a troca no 1o logon: quem usa conta
+    # local (hospital) nao tem como trocar a senha do AD sozinho.
+    if senha_nunca_expira:
+        uac_final = 512 | 65536
+    else:
+        conn.modify(dn, {"pwdLastSet": [(MODIFY_REPLACE, [0])]})
+        uac_final = 512
+    ok_habilitar = conn.modify(dn, {"userAccountControl": [(MODIFY_REPLACE, [uac_final])]})
     if not ok_habilitar:
         motivo = (conn.result or {}).get("message") or "Usuário criado, mas falhou ao habilitar a conta."
         conn.unbind()
