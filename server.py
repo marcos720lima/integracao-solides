@@ -572,7 +572,7 @@ def enviar_email_notificacao(dados_colaborador, resultado_ad, resultado_sistemas
         )
         
         msg = MIMEMultipart('related')
-        msg['Subject'] = f"NOTIFICAÇÃO: Colaborador Demitido - {nome_colaborador}"
+        msg['Subject'] = f"NOTIFICAÇÃO: Desativação de Colaborador - {nome_colaborador}"
         msg['From'] = EMAIL_CONFIG['username']
         msg['To'] = ', '.join(TI_EMAILS)
 
@@ -694,9 +694,7 @@ def _gerar_html_email(nome, cpf, dados, setor, cargo, status, resultado_ad):
             <div class="cabecalho">
                 <img src="cid:logo_unimed" alt="Unimed Oeste do Pará">
             </div>
-            <div class="corpo">
-            <h2>NOTIFICAÇÃO: Colaborador Demitido - {nome}</h2>
-            
+            <div class="corpo">        
             <h3>Informações do Colaborador</h3>
             <div class="info-box">
                 <table>

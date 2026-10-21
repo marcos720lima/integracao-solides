@@ -351,10 +351,9 @@ def _total_configurado_manualmente(sku_id):
 
 
 def _total_via_reseller(sku_id):
-    """Tenta a Reseller API para o total contratado. So funciona se a
-    assinatura da organizacao for gerenciada por um revendedor - caso
-    contrario a API retorna erro (403/404) e a funcao devolve None em vez de
-    propagar a excecao, para o chamador cair no valor manual."""
+    """Total contratado via Reseller API. Usa o teto da assinatura
+    (maximumNumberOfSeats no plano FLEXIBLE, numberOfSeats nos anuais) -
+    nunca licensedNumberOfSeats, que e a quantidade atribuida (uso)."""
     dominio = os.getenv("GOOGLE_WORKSPACE_DOMAIN", "").strip()
     if not dominio:
         return None
@@ -362,11 +361,16 @@ def _total_via_reseller(sku_id):
         service = obter_service_reseller()
         resposta = service.subscriptions().list(customerId=dominio).execute()
         for assinatura in resposta.get("subscriptions", []):
-            if assinatura.get("skuId") == sku_id:
-                seats = assinatura.get("seats", {})
-                total = seats.get("licensedNumberOfSeats") or seats.get("numberOfSeats")
-                if total is not None:
-                    return int(total)
+            if assinatura.get("skuId") != sku_id:
+                continue
+            seats = assinatura.get("seats", {})
+            plano = assinatura.get("plan", {}).get("planName", "")
+            if plano == "FLEXIBLE":
+                total = seats.get("maximumNumberOfSeats")
+            else:
+                total = seats.get("numberOfSeats")
+            if total is not None:
+                return int(total)
     except Exception:
         return None
     return None

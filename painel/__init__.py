@@ -400,16 +400,19 @@ def ferias():
     from_s = request.args.get("from", "")
     to_s = request.args.get("to", "")
     status_filter = request.args.get("status", "").strip()
-    only_now = request.args.get("now") == "1"
+    exibir = request.args.get("exibir", "").strip().lower()
+    if exibir not in ("agora", "todos"):
+        exibir = "agora" if request.args.get("now", "1") == "1" else "todos"
+    only_now = exibir == "agora"
 
     try:
         current_page = max(1, int(request.args.get("page", "1")))
     except ValueError:
         current_page = 1
     try:
-        size = max(1, min(int(request.args.get("size", "20")), 200))
+        size = max(1, min(int(request.args.get("size", "15")), 200))
     except ValueError:
-        size = 20
+        size = 15
 
     rows, has_next, total_now, erro = [], False, 0, None
     try:
@@ -425,7 +428,7 @@ def ferias():
 
     return render_template(
         "ferias.html",
-        rows=rows, from_=from_s, to_=to_s, status=status_filter, only_now=only_now,
+        rows=rows, from_=from_s, to_=to_s, status=status_filter, only_now=only_now, exibir=exibir,
         size=size, current_page=current_page, has_next_page=has_next,
         total_now=total_now, erro=erro,
         sistemas_ferias=SISTEMAS_DISPONIVEIS,

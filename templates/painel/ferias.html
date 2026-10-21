@@ -22,6 +22,13 @@
   <form method="GET" class="toolbar-historico">
     <input type="hidden" name="page" value="1">
     <div class="campo-toolbar">
+      <label for="exibir">Exibir</label>
+      <select id="exibir" name="exibir" onchange="this.form.submit()">
+        <option value="agora" {{ 'selected' if exibir == 'agora' }}>Em férias agora</option>
+        <option value="todos" {{ 'selected' if exibir == 'todos' }}>Todos os registros</option>
+      </select>
+    </div>
+    <div class="campo-toolbar">
       <label for="from">De</label>
       <input type="date" id="from" name="from" value="{{ from_ }}">
     </div>
@@ -46,10 +53,10 @@
         {% endfor %}
       </select>
     </div>
-    <label class="checkbox-item" style="align-self:flex-end;">
-      <input type="checkbox" name="now" value="1" {{ 'checked' if only_now }}> Somente em férias agora
-    </label>
     <button type="submit" class="btn btn-primario">Buscar</button>
+    {% if request.args %}
+    <a href="{{ url_for('painel.ferias') }}" class="btn-limpar-filtros" style="align-self:flex-end;">Limpar filtros</a>
+    {% endif %}
   </form>
 
   {% if rows %}
@@ -89,7 +96,7 @@
     </table>
   </div>
   {% else %}
-  {% if not erro %}<div class="estado-vazio">Nenhum registro de férias encontrado com esses filtros.</div>{% endif %}
+  {% if not erro %}<div class="estado-vazio">{{ 'Ninguém em férias agora com esses filtros.' if only_now else 'Nenhum registro de férias encontrado com esses filtros.' }}</div>{% endif %}
   {% endif %}
 
   {% if rows %}
