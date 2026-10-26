@@ -80,13 +80,13 @@
             <div><span>Formulário</span> {% if s.possui_formulario %}Sim{% if s.anexos %} · <a href="#" class="link-anexo-tabela" onclick="abrirDetalhes('{{ s.id }}'); return false;">ver anexo{{ 's' if s.anexos|length > 1 }}</a>{% endif %}{% else %}Não{% endif %}</div>
           </td>
           <td>{{ s.data_solicitacao_br or '—' }}</td>
-          <td><span class="badge badge-{{ st[1] }}" {% if s.erro %}title="{{ s.erro }}"{% endif %}>{{ st[0] }}</span></td>
+          <td><span class="badge badge-{{ st[1] }}" {% if s.erro %}title="{{ s.erro }}"{% elif s.cancelamento %}title="Motivo: {{ s.cancelamento.motivo }}"{% endif %}>{{ st[0] }}</span></td>
           <td class="celula-acoes">
             <button type="button" class="btn-icone" title="Ver detalhes" onclick="abrirDetalhes('{{ s.id }}')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
             {% if s.status in ('agendada', 'em_andamento', 'erro') %}
-            <button type="button" class="btn-icone btn-icone-perigo" title="Cancelar" onclick="cancelarSolicitacao('{{ s.id }}', this)">
+            <button type="button" class="btn-icone btn-icone-perigo" title="Cancelar" onclick="cancelarSolicitacao('{{ s.id }}')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
             {% endif %}
@@ -223,6 +223,31 @@
       </div>
     </div>
     <div class="visualizador-corpo" id="anexo-corpo"></div>
+  </div>
+</div>
+
+<!-- ============ CANCELAR ============ -->
+<div class="modal-overlay" id="modal-cancelar" onclick="if (event.target === this) fecharCancelamento()">
+  <div class="modal-card modal-card-estreito">
+    <div class="modal-header">
+      <div style="min-width:0;">
+        <div class="modal-titulo">Cancelar alteração de horário</div>
+        <div class="modal-subtitulo" id="cancelar-quem">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharCancelamento()">&times;</button>
+    </div>
+    <div class="modal-passo">
+      <div class="chips-datas" id="cancelar-datas" style="margin-bottom:12px;"></div>
+      <div class="campo">
+        <label for="cancelar-motivo">Motivo do cancelamento <span class="obrigatorio">*</span></label>
+        <textarea id="cancelar-motivo" rows="3" maxlength="500" placeholder="Ex.: gestor desistiu da liberação, data errada, colaborador de atestado…"></textarea>
+      </div>
+      <p class="secao-dica" id="cancelar-aviso" style="margin-top:8px;"></p>
+      <div class="modal-rodape">
+        <button type="button" class="btn-limpar-filtros" onclick="fecharCancelamento()">Voltar</button>
+        <button type="button" class="btn btn-perigo" id="btn-confirmar-cancelamento" disabled onclick="confirmarCancelamento()">Cancelar solicitação</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -564,15 +589,59 @@
   }
 
   /* ---------- cancelar ---------- */
-  async function cancelarSolicitacao(id, botao) {
+  const MOTIVO_MINIMO = 5;
+  let cancelandoId = null;
+  let cancelandoEnvio = false;
+
+  function cancelarSolicitacao(id) {
     const s = SOLICITACOES.find(x => x.id === id);
-    if (!confirm(`Cancelar a alteração de horário de ${s ? s.nome : 'este colaborador'}? Se estiver valendo hoje, o horário original volta na hora.`)) return;
-    botao.disabled = true;
-    const r = await fetch("{{ url_for('painel.api_alteracoes_horario_cancelar', id_solicitacao='__ID__') }}".replace('__ID__', id), { method: 'POST' });
-    const d = await r.json();
-    if (!r.ok) { mostrarToast(d.erro || 'Falha ao cancelar.', 'erro'); botao.disabled = false; return; }
-    mostrarToast(d.mensagem, 'sucesso');
-    setTimeout(() => window.location.reload(), 900);
+    if (!s) return;
+    cancelandoId = id;
+    cancelandoEnvio = false;
+    document.getElementById('cancelar-quem').textContent = `${s.nome} · ${s.sam}`;
+    document.getElementById('cancelar-datas').innerHTML = s.itens.map(i =>
+      `<span class="chip-data">${esc(i.data_br.slice(0, 5))} · ${esc(i.faixa_ad)}</span>`).join('');
+    document.getElementById('cancelar-aviso').textContent = s.status === 'em_andamento'
+      ? 'Se alguma data estiver valendo hoje, o horário original volta no AD na hora.'
+      : 'As datas desta solicitação não serão mais liberadas.';
+    const motivo = document.getElementById('cancelar-motivo');
+    motivo.value = '';
+    atualizarBotaoCancelamento();
+    document.getElementById('modal-cancelar').classList.add('aberto');
+    setTimeout(() => motivo.focus(), 50);
+  }
+
+  function fecharCancelamento() {
+    document.getElementById('modal-cancelar').classList.remove('aberto');
+    cancelandoId = null;
+  }
+
+  function atualizarBotaoCancelamento() {
+    const preenchido = document.getElementById('cancelar-motivo').value.trim().length >= MOTIVO_MINIMO;
+    const botao = document.getElementById('btn-confirmar-cancelamento');
+    botao.disabled = cancelandoEnvio || !preenchido;
+    botao.title = preenchido ? '' : 'Informe o motivo do cancelamento';
+  }
+  document.getElementById('cancelar-motivo').addEventListener('input', atualizarBotaoCancelamento);
+
+  async function confirmarCancelamento() {
+    const motivo = document.getElementById('cancelar-motivo').value.trim();
+    if (!cancelandoId || motivo.length < MOTIVO_MINIMO) return;
+    cancelandoEnvio = true;
+    atualizarBotaoCancelamento();
+    try {
+      const r = await fetch("{{ url_for('painel.api_alteracoes_horario_cancelar', id_solicitacao='__ID__') }}".replace('__ID__', cancelandoId), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motivo }),
+      });
+      const d = await r.json();
+      if (!r.ok) { mostrarToast(d.erro || 'Falha ao cancelar.', 'erro'); cancelandoEnvio = false; atualizarBotaoCancelamento(); return; }
+      mostrarToast(d.mensagem, 'sucesso');
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      mostrarToast('Falha ao cancelar.', 'erro');
+      cancelandoEnvio = false;
+      atualizarBotaoCancelamento();
+    }
   }
 
   /* ---------- detalhes ---------- */
@@ -605,6 +674,7 @@
         ${det('Formulário preenchido', s.possui_formulario ? 'Sim' : 'Não')}
         ${det('Data da solicitação', esc(s.data_solicitacao_br || '—'))}
         ${det('Observação', esc(s.motivo || '—'))}
+        ${s.cancelamento ? det('Cancelada por', `${esc(s.cancelamento.por || '—')} em ${esc(formatarQuando(s.cancelamento.em))}`) + det('Motivo do cancelamento', esc(s.cancelamento.motivo)) : ''}
         ${det('Registrado por', `${esc(s.criado_por || '—')} em ${esc(formatarQuando(s.criado_em))}`)}
       </div>
       ${(s.anexos || []).length ? `<div class="secao-titulo">Formulário anexado</div><div class="lista-anexos">${s.anexos.map(a => `
@@ -657,6 +727,7 @@
   document.addEventListener('keydown', ev => {
     if (ev.key !== 'Escape') return;
     if (document.getElementById('modal-anexo').classList.contains('aberto')) return fecharAnexo();
+    if (document.getElementById('modal-cancelar').classList.contains('aberto')) return fecharCancelamento();
     if (document.getElementById('modal-horario-atual').classList.contains('aberto')) return fecharHorarioAtual();
     fecharNovaAlteracao(); fecharDetalhes();
   });

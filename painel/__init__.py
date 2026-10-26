@@ -1074,7 +1074,8 @@ def alteracoes_horario_anexo(id_solicitacao, id_anexo):
 @login_obrigatorio
 def api_alteracoes_horario_cancelar(id_solicitacao):
     usuario = (session.get("usuario") or {}).get("login", "")
-    ok, mensagem = alteracoes_horario.cancelar_solicitacao(id_solicitacao, usuario)
+    dados = request.get_json(silent=True) or {}
+    ok, mensagem = alteracoes_horario.cancelar_solicitacao(id_solicitacao, usuario, dados.get("motivo"))
     if not ok:
         return jsonify({"erro": mensagem}), 400
     return jsonify({"mensagem": mensagem})

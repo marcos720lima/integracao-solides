@@ -373,7 +373,13 @@ def criar_solicitacao(colaborador, itens, motivo, criado_por, gestor=None, aprov
     return registro
 
 
-def cancelar_solicitacao(id_solicitacao, usuario):
+MOTIVO_CANCELAMENTO_MINIMO = 5
+
+
+def cancelar_solicitacao(id_solicitacao, usuario, motivo=""):
+    motivo = (motivo or "").strip()
+    if len(motivo) < MOTIVO_CANCELAMENTO_MINIMO:
+        return False, "Informe o motivo do cancelamento."
     with _lock:
         lista = _carregar_solicitacoes()
         alvo = next((s for s in lista if s["id"] == id_solicitacao), None)
@@ -384,7 +390,8 @@ def cancelar_solicitacao(id_solicitacao, usuario):
         if status_da_solicitacao(alvo) == "concluida":
             return False, "Essa solicitação já terminou."
         alvo["estado"] = "cancelada"
-        alvo["historico"].append(_evento(f"Cancelada por {usuario or '—'}"))
+        alvo["cancelamento"] = {"motivo": motivo[:500], "por": usuario or "", "em": _agora_iso()}
+        alvo["historico"].append(_evento(f"Cancelada por {usuario or '—'}. Motivo: {motivo[:500]}"))
         _salvar_solicitacoes(lista)
         sam = alvo["sam"]
     reconciliar_colaborador(sam)

@@ -2121,3 +2121,11 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
 .dica-anexo { font-size: 12px; color: var(--danger); }
 
 #btn-salvar:disabled { opacity: 0.45; cursor: not-allowed; background: var(--accent); }
+
+/* ---------- cancelar alteração de horário ---------- */
+
+.btn-perigo { background: var(--danger); color: #fff; }
+.btn-perigo:hover:not(:disabled) { filter: brightness(0.92); }
+.btn-perigo:disabled { opacity: 0.45; cursor: not-allowed; }
+
+#cancelar-motivo { resize: vertical; min-height: 76px; }
