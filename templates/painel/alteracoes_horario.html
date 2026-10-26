@@ -176,6 +176,7 @@
           </label>
           <input type="file" id="input-anexos" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" multiple hidden>
           <div class="lista-anexos" id="lista-anexos"></div>
+          <div class="dica-anexo" id="dica-anexo">Anexe o formulário para liberar o botão "Salvar alteração".</div>
         </div>
         <div class="campo full">
           <label for="motivo">Observação <span style="font-weight:400; color:var(--text-muted);">(opcional — ex.: nº do chamado no GLPI)</span></label>
@@ -288,6 +289,8 @@
     anexosSelecionados = [];
     renderizarAnexos();
     document.getElementById('campo-anexos').hidden = true;
+    salvando = false;
+    atualizarBotaoSalvar();
     document.getElementById('data-solicitacao').value = HOJE;
     document.getElementById('busca-colab').value = '';
     document.getElementById('resultados-colab').innerHTML = '<div class="resultados-ad-vazio">Digite pelo menos 2 letras para buscar.</div>';
@@ -498,10 +501,26 @@
       item.appendChild(remover);
       lista.appendChild(item);
     });
+    atualizarBotaoSalvar();
+  }
+
+  let salvando = false;
+
+  function faltaAnexo() {
+    return document.getElementById('possui-formulario').checked && !anexosSelecionados.length;
+  }
+
+  function atualizarBotaoSalvar() {
+    const botao = document.getElementById('btn-salvar');
+    const falta = faltaAnexo();
+    botao.disabled = salvando || falta;
+    botao.title = falta ? 'Anexe o formulário preenchido para salvar' : '';
+    document.getElementById('dica-anexo').hidden = !falta;
   }
 
   document.getElementById('possui-formulario').addEventListener('change', ev => {
     document.getElementById('campo-anexos').hidden = !ev.target.checked;
+    atualizarBotaoSalvar();
   });
   document.getElementById('input-anexos').addEventListener('change', ev => {
     adicionarAnexos(ev.target.files);
@@ -525,24 +544,22 @@
       possui_formulario: document.getElementById('possui-formulario').checked,
       motivo: document.getElementById('motivo').value,
     };
-    if (corpo.possui_formulario && !anexosSelecionados.length) {
-      mostrarToast('Anexe o formulário preenchido (PDF, PNG ou JPG) para continuar.', 'erro');
-      document.getElementById('area-anexo').classList.add('anexo-faltando');
-      return;
-    }
+    if (faltaAnexo()) { atualizarBotaoSalvar(); return; }
     const envio = new FormData();
     envio.append('dados', JSON.stringify(corpo));
     if (corpo.possui_formulario) anexosSelecionados.forEach(a => envio.append('anexos', a, a.name));
-    botao.disabled = true;
+    salvando = true;
+    atualizarBotaoSalvar();
     try {
       const r = await fetch(URL_CRIAR, { method: 'POST', body: envio });
       const d = await r.json();
-      if (!r.ok) { mostrarToast(d.erro || 'Falha ao salvar.', 'erro'); botao.disabled = false; return; }
+      if (!r.ok) { mostrarToast(d.erro || 'Falha ao salvar.', 'erro'); salvando = false; atualizarBotaoSalvar(); return; }
       mostrarToast(d.mensagem, 'sucesso');
       setTimeout(() => window.location.reload(), 700);
     } catch (e) {
       mostrarToast('Falha ao salvar.', 'erro');
-      botao.disabled = false;
+      salvando = false;
+      atualizarBotaoSalvar();
     }
   }
 
