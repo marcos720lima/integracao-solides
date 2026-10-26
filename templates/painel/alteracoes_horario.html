@@ -1,0 +1,510 @@
+{% extends "base.html" %}
+{% block titulo %}Alterações de horário{% endblock %}
+
+{% set rotulos_status = {
+  'agendada': ('Agendada', 'pendente'),
+  'em_andamento': ('Em andamento', 'executando'),
+  'concluida': ('Concluída', 'sucesso'),
+  'cancelada': ('Cancelada', 'skipped'),
+  'erro': ('Erro', 'erro'),
+} %}
+
+{% block conteudo %}
+<div class="page-header page-header-com-acao">
+  <div>
+    <h1>Alterações de horário</h1>
+    <p>Liberações de horário de logon no AD por data. As horas pedidas são somadas ao horário da pessoa e o horário original volta sozinho no dia seguinte.</p>
+  </div>
+  <button type="button" class="btn btn-primario" onclick="abrirNovaAlteracao()">+ Nova alteração</button>
+</div>
+
+<div class="card-panel">
+  <div class="barra-filtros-horario">
+    <button type="button" class="btn-secundario" id="btn-filtros" onclick="alternarFiltros()" aria-expanded="{{ 'true' if filtro_ativo else 'false' }}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"/></svg>
+      <span>Filtros{% if filtro_ativo %} (ativos){% endif %}</span>
+    </button>
+    <span class="contagem-solicitacoes">{{ solicitacoes|length }} solicitaç{{ 'ão' if solicitacoes|length == 1 else 'ões' }}</span>
+  </div>
+
+  <form method="GET" class="toolbar-historico painel-filtros-horario" id="painel-filtros" {% if not filtro_ativo %}hidden{% endif %}>
+    <div class="campo-toolbar">
+      <label for="f-de">De</label>
+      <input type="date" id="f-de" name="de" value="{{ de }}">
+    </div>
+    <div class="campo-toolbar">
+      <label for="f-ate">Até</label>
+      <input type="date" id="f-ate" name="ate" value="{{ ate }}">
+    </div>
+    <div class="campo-toolbar campo-busca">
+      <label for="f-colab">Colaborador</label>
+      <input type="text" id="f-colab" name="colaborador" value="{{ colaborador }}" placeholder="Nome, login, CPF ou setor">
+    </div>
+    <button type="submit" class="btn btn-primario">Aplicar</button>
+    {% if filtro_ativo %}<a href="{{ url_for('painel.alteracoes_horario') }}" class="btn-limpar-filtros">Limpar</a>{% endif %}
+  </form>
+
+  {% if solicitacoes %}
+  <div style="overflow-x:auto;">
+    <table class="tabela">
+      <thead>
+        <tr>
+          <th>Colaborador</th>
+          <th>Datas liberadas (como fica no AD)</th>
+          <th>Aprovação</th>
+          <th>Solicitado em</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in solicitacoes %}
+        {% set st = rotulos_status.get(s.status, (s.status, 'pendente')) %}
+        <tr>
+          <td>
+            <div class="celula-colab-nome">{{ s.nome }}</div>
+            <div class="celula-colab-sub">{{ s.sam }}{% if s.setor %} · {{ s.setor }}{% endif %}</div>
+          </td>
+          <td>
+            <div class="chips-datas">
+              {% for i in s['itens'] %}
+              <span class="chip-data {{ 'chip-data-valendo' if i.aplicado_em and not i.restaurado_em and not i.observacao else ('chip-data-ok' if i.restaurado_em else '') }}" title="Pedido: {{ i.inicio }}–{{ i.fim }}">
+                {{ i.data_br[:5] }} · {{ i.faixa_ad }}
+              </span>
+              {% endfor %}
+            </div>
+          </td>
+          <td class="celula-aprovacao">
+            <div><span>Gestor</span> {{ s.gestor.nome if s.gestor else '—' }}</div>
+            <div><span>GP</span> {{ s.aprovador_gp.nome if s.aprovador_gp else '—' }}</div>
+            <div><span>Formulário</span> {{ 'Sim' if s.possui_formulario else 'Não' }}</div>
+          </td>
+          <td>{{ s.data_solicitacao_br or '—' }}</td>
+          <td><span class="badge badge-{{ st[1] }}" {% if s.erro %}title="{{ s.erro }}"{% endif %}>{{ st[0] }}</span></td>
+          <td class="celula-acoes">
+            <button type="button" class="btn-icone" title="Ver detalhes" onclick="abrirDetalhes('{{ s.id }}')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+            {% if s.status in ('agendada', 'em_andamento', 'erro') %}
+            <button type="button" class="btn-icone btn-icone-perigo" title="Cancelar" onclick="cancelarSolicitacao('{{ s.id }}', this)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="estado-vazio">
+    {% if filtro_ativo %}Nenhuma solicitação encontrada com esses filtros.{% else %}Nenhuma alteração de horário registrada ainda. Use "+ Nova alteração" para começar.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ============ NOVA ALTERAÇÃO ============ -->
+<div class="modal-overlay" id="modal-nova" onclick="if (event.target === this) fecharNovaAlteracao()">
+  <div class="modal-card modal-card-largo">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo">Nova alteração de horário</div>
+        <div class="modal-subtitulo" id="nova-passo">Passo 1 de 2 · escolher o colaborador</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharNovaAlteracao()">&times;</button>
+    </div>
+
+    <!-- passo 1 -->
+    <div class="modal-passo" id="passo-1">
+      <div class="campo">
+        <label for="busca-colab">Solicitante (colaborador que terá o horário ajustado)</label>
+        <input type="text" id="busca-colab" placeholder="Buscar no AD por nome, CPF, login ou setor" autocomplete="off">
+      </div>
+      <div class="resultados-ad" id="resultados-colab">
+        <div class="resultados-ad-vazio">Digite pelo menos 2 letras para buscar.</div>
+      </div>
+    </div>
+
+    <!-- passo 2 -->
+    <div class="modal-passo" id="passo-2" hidden>
+      <div class="colab-escolhido">
+        <div>
+          <div class="celula-colab-nome" id="colab-nome">—</div>
+          <div class="celula-colab-sub" id="colab-sub">—</div>
+        </div>
+        <div class="colab-escolhido-acoes">
+          <button type="button" class="btn-secundario" onclick="abrirHorarioAtual()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span>Horário atual</span>
+          </button>
+          <button type="button" class="btn-limpar-filtros" onclick="irParaPasso(1)">Trocar</button>
+        </div>
+      </div>
+
+      <div class="secao-titulo">Datas e horários a liberar</div>
+      <p class="secao-dica">As horas são somadas ao horário da pessoa. O AD só aceita hora cheia: o início arredonda pra baixo e o fim pra cima (13:30–14:30 vira 13:00–15:00).</p>
+      <div id="linhas-datas"></div>
+      <button type="button" class="btn-limpar-filtros" onclick="adicionarLinha()">+ Adicionar data</button>
+
+      <div class="previa-horario" id="previa" hidden></div>
+
+      <div class="secao-titulo">Aprovação</div>
+      <div class="form-grid form-grid-modal">
+        <div class="campo">
+          <label>Gestor ou supervisor imediato</label>
+          <div class="seletor-ad" data-campo="gestor"></div>
+        </div>
+        <div class="campo">
+          <label>Aprovação da Gestão de Pessoas</label>
+          <div class="seletor-ad" data-campo="aprovador_gp"></div>
+        </div>
+        <div class="campo">
+          <label for="data-solicitacao">Data da solicitação</label>
+          <input type="date" id="data-solicitacao" value="{{ hoje }}" max="{{ hoje }}">
+        </div>
+        <div class="campo">
+          <label>&nbsp;</label>
+          <label class="checkbox-item" for="possui-formulario">
+            <input type="checkbox" id="possui-formulario"> Possui formulário preenchido
+          </label>
+        </div>
+        <div class="campo full">
+          <label for="motivo">Observação <span style="font-weight:400; color:var(--text-muted);">(opcional — ex.: nº do chamado no GLPI)</span></label>
+          <input type="text" id="motivo" maxlength="300">
+        </div>
+      </div>
+
+      <div class="modal-rodape">
+        <button type="button" class="btn-limpar-filtros" onclick="irParaPasso(1)">Voltar</button>
+        <button type="button" class="btn btn-primario" id="btn-salvar" onclick="salvarAlteracao()">Salvar alteração</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HORÁRIO ATUAL (card sobre card) ============ -->
+<div class="modal-overlay modal-sobreposto" id="modal-horario-atual" onclick="if (event.target === this) fecharHorarioAtual()">
+  <div class="modal-card modal-card-estreito">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo">Horário atual no AD</div>
+        <div class="modal-subtitulo" id="horario-atual-quem">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharHorarioAtual()">&times;</button>
+    </div>
+    <div class="modal-passo">
+      <table class="tabela tabela-compacta tabela-semana" id="tabela-horario-atual"></table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ DETALHES ============ -->
+<div class="modal-overlay" id="modal-detalhes" onclick="if (event.target === this) fecharDetalhes()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-titulo" id="det-nome">—</div>
+        <div class="modal-subtitulo" id="det-sub">—</div>
+      </div>
+      <button type="button" class="modal-fechar" onclick="fecharDetalhes()">&times;</button>
+    </div>
+    <div class="modal-passo" id="det-corpo"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const SOLICITACOES = {{ solicitacoes|tojson }};
+  const HOJE = "{{ hoje }}";
+  const URL_BUSCA = "{{ url_for('painel.api_alteracoes_horario_buscar_ad') }}";
+  const URL_PREVIA = "{{ url_for('painel.api_alteracoes_horario_previa') }}";
+  const URL_CRIAR = "{{ url_for('painel.api_alteracoes_horario_criar') }}";
+  const DIAS = [['Dom', 'Domingo'], ['Seg', 'Segunda'], ['Ter', 'Terça'], ['Qua', 'Quarta'], ['Qui', 'Quinta'], ['Sex', 'Sexta'], ['Sáb', 'Sábado']];
+
+  let colabEscolhido = null;
+  const pessoas = { gestor: null, aprovador_gp: null };
+
+  function esc(t) { const d = document.createElement('div'); d.textContent = t ?? ''; return d.innerHTML; }
+
+  function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+  async function buscarAD(termo) {
+    const r = await fetch(`${URL_BUSCA}?q=${encodeURIComponent(termo)}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.erro || 'Falha ao buscar no AD.');
+    return d.usuarios || [];
+  }
+
+  /* ---------- filtros ---------- */
+  function alternarFiltros() {
+    const painel = document.getElementById('painel-filtros');
+    painel.hidden = !painel.hidden;
+    document.getElementById('btn-filtros').setAttribute('aria-expanded', String(!painel.hidden));
+    if (!painel.hidden) document.getElementById('f-colab').focus();
+  }
+
+  /* ---------- passo 1: colaborador ---------- */
+  function abrirNovaAlteracao() {
+    colabEscolhido = null;
+    pessoas.gestor = null; pessoas.aprovador_gp = null;
+    document.querySelectorAll('.seletor-ad').forEach(montarSeletor);
+    document.getElementById('linhas-datas').innerHTML = '';
+    adicionarLinha();
+    document.getElementById('motivo').value = '';
+    document.getElementById('possui-formulario').checked = false;
+    document.getElementById('data-solicitacao').value = HOJE;
+    document.getElementById('busca-colab').value = '';
+    document.getElementById('resultados-colab').innerHTML = '<div class="resultados-ad-vazio">Digite pelo menos 2 letras para buscar.</div>';
+    irParaPasso(1);
+    document.getElementById('modal-nova').classList.add('aberto');
+    setTimeout(() => document.getElementById('busca-colab').focus(), 50);
+  }
+
+  function fecharNovaAlteracao() { document.getElementById('modal-nova').classList.remove('aberto'); }
+
+  function irParaPasso(n) {
+    document.getElementById('passo-1').hidden = n !== 1;
+    document.getElementById('passo-2').hidden = n !== 2;
+    document.getElementById('nova-passo').textContent = n === 1
+      ? 'Passo 1 de 2 · escolher o colaborador'
+      : 'Passo 2 de 2 · datas, horários e aprovação';
+  }
+
+  const buscarColaboradores = debounce(async () => {
+    const termo = document.getElementById('busca-colab').value.trim();
+    const caixa = document.getElementById('resultados-colab');
+    if (termo.length < 2) { caixa.innerHTML = '<div class="resultados-ad-vazio">Digite pelo menos 2 letras para buscar.</div>'; return; }
+    caixa.innerHTML = '<div class="resultados-ad-vazio">Buscando no AD…</div>';
+    try {
+      const lista = await buscarAD(termo);
+      if (!lista.length) { caixa.innerHTML = '<div class="resultados-ad-vazio">Ninguém encontrado.</div>'; return; }
+      caixa.innerHTML = '';
+      lista.forEach(u => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'resultado-ad';
+        item.innerHTML = `<span class="celula-colab-nome">${esc(u.nome)}${u.desativado ? ' <span class="badge badge-erro">desativado</span>' : ''}</span>
+          <span class="celula-colab-sub">${esc(u.sam)}${u.setor ? ' · ' + esc(u.setor) : ''}${u.cpf ? ' · CPF ' + esc(u.cpf) : ''}</span>`;
+        item.addEventListener('click', () => escolherColaborador(u));
+        caixa.appendChild(item);
+      });
+    } catch (e) { caixa.innerHTML = `<div class="resultados-ad-vazio">${esc(e.message)}</div>`; }
+  }, 300);
+  document.getElementById('busca-colab').addEventListener('input', buscarColaboradores);
+
+  function escolherColaborador(u) {
+    colabEscolhido = u;
+    document.getElementById('colab-nome').textContent = u.nome;
+    document.getElementById('colab-sub').textContent = [u.sam, u.setor, u.email].filter(Boolean).join(' · ');
+    irParaPasso(2);
+    atualizarPrevia();
+  }
+
+  /* ---------- horário atual (card sobre card) ---------- */
+  function abrirHorarioAtual() {
+    if (!colabEscolhido) return;
+    const h = colabEscolhido.horario || {};
+    document.getElementById('horario-atual-quem').textContent = `${colabEscolhido.nome} · ${colabEscolhido.sam}`;
+    const tabela = document.getElementById('tabela-horario-atual');
+    if (h['*']) {
+      tabela.innerHTML = `<tbody><tr><td colspan="2">${esc(h['*'])} — a conta pode logar a qualquer hora.</td></tr></tbody>`;
+    } else {
+      const ordem = [1, 2, 3, 4, 5, 6, 0];
+      tabela.innerHTML = '<thead><tr><th>Dia</th><th>Horário liberado</th></tr></thead><tbody>' +
+        ordem.map(i => `<tr><td>${DIAS[i][1]}</td><td class="mono">${esc(h[DIAS[i][0]] || 'Nenhum')}</td></tr>`).join('') + '</tbody>';
+    }
+    document.getElementById('modal-horario-atual').classList.add('aberto');
+  }
+  function fecharHorarioAtual() { document.getElementById('modal-horario-atual').classList.remove('aberto'); }
+
+  /* ---------- linhas de datas ---------- */
+  function adicionarLinha(dados = {}) {
+    const linha = document.createElement('div');
+    linha.className = 'linha-data';
+    linha.innerHTML = `
+      <div class="campo"><label>Data</label><input type="date" class="ld-data" min="${HOJE}" value="${dados.data || ''}"></div>
+      <div class="campo"><label>Início</label><input type="time" class="ld-inicio" value="${dados.inicio || ''}"></div>
+      <div class="campo"><label>Fim</label><input type="time" class="ld-fim" value="${dados.fim || ''}"></div>
+      <button type="button" class="btn-icone btn-icone-perigo" title="Remover data" aria-label="Remover data">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>`;
+    linha.querySelector('button').addEventListener('click', () => {
+      linha.remove();
+      if (!document.querySelector('.linha-data')) adicionarLinha();
+      atualizarPrevia();
+    });
+    linha.querySelectorAll('input').forEach(i => i.addEventListener('change', atualizarPrevia));
+    document.getElementById('linhas-datas').appendChild(linha);
+  }
+
+  function itensDoFormulario() {
+    return [...document.querySelectorAll('.linha-data')].map(l => ({
+      data: l.querySelector('.ld-data').value,
+      inicio: l.querySelector('.ld-inicio').value,
+      fim: l.querySelector('.ld-fim').value,
+    })).filter(i => i.data || i.inicio || i.fim);
+  }
+
+  const atualizarPrevia = debounce(async () => {
+    const caixa = document.getElementById('previa');
+    const itens = itensDoFormulario().filter(i => i.data && i.inicio && i.fim);
+    if (!colabEscolhido || !itens.length) { caixa.hidden = true; return; }
+    try {
+      const r = await fetch(URL_PREVIA, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sam: colabEscolhido.sam, itens }),
+      });
+      const d = await r.json();
+      if (!r.ok) { caixa.hidden = false; caixa.innerHTML = `<div class="previa-erro">${esc(d.erro)}</div>`; return; }
+      let html = '<div class="secao-titulo" style="margin-top:0;">Como vai ficar no AD</div>';
+      if (d.erros && d.erros.length) html += d.erros.map(e => `<div class="previa-erro">${esc(e)}</div>`).join('');
+      html += d.linhas.map(l => `
+        <div class="previa-linha">
+          <div class="previa-data">${esc(l.dia_semana)}, ${esc(l.data_br)} <span>libera ${esc(l.pedido_no_ad)}</span></div>
+          <div class="previa-antes-depois">
+            <span class="mono previa-antes">${esc(l.atual)}</span>
+            <span aria-hidden="true">→</span>
+            <span class="mono previa-depois">${esc(l.vai_ficar)}</span>
+          </div>
+        </div>`).join('');
+      if (d.sem_restricao) html += '<div class="previa-erro">Essa conta não tem restrição de horário no AD — ela já pode logar a qualquer hora.</div>';
+      caixa.innerHTML = html;
+      caixa.hidden = false;
+    } catch (e) { caixa.hidden = true; }
+  }, 350);
+
+  /* ---------- seletor de pessoa do AD (gestor / aprovação GP) ---------- */
+  function montarSeletor(el) {
+    const campo = el.dataset.campo;
+    const pessoa = pessoas[campo];
+    el.innerHTML = '';
+    if (pessoa) {
+      const tag = document.createElement('div');
+      tag.className = 'pessoa-escolhida';
+      tag.innerHTML = `<div><div class="celula-colab-nome">${esc(pessoa.nome)}</div><div class="celula-colab-sub">${esc(pessoa.sam)}${pessoa.setor ? ' · ' + esc(pessoa.setor) : ''}</div></div>`;
+      const limpar = document.createElement('button');
+      limpar.type = 'button';
+      limpar.className = 'btn-icone';
+      limpar.title = 'Trocar';
+      limpar.innerHTML = '&times;';
+      limpar.addEventListener('click', () => { pessoas[campo] = null; montarSeletor(el); el.querySelector('input').focus(); });
+      tag.appendChild(limpar);
+      el.appendChild(tag);
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Buscar no AD';
+    input.autocomplete = 'off';
+    const lista = document.createElement('div');
+    lista.className = 'grupos-sugestoes';
+    lista.hidden = true;
+    const buscar = debounce(async () => {
+      const termo = input.value.trim();
+      if (termo.length < 2) { lista.hidden = true; return; }
+      lista.innerHTML = '<div class="grupo-sugestao-vazia">Buscando…</div>';
+      lista.hidden = false;
+      try {
+        const usuarios = await buscarAD(termo);
+        lista.innerHTML = usuarios.length ? '' : '<div class="grupo-sugestao-vazia">Ninguém encontrado.</div>';
+        usuarios.forEach(u => {
+          const item = document.createElement('div');
+          item.className = 'grupo-sugestao';
+          item.innerHTML = `<strong>${esc(u.nome)}</strong><span>${esc(u.sam)}${u.setor ? ' · ' + esc(u.setor) : ''}</span>`;
+          item.addEventListener('mousedown', ev => { ev.preventDefault(); pessoas[campo] = u; montarSeletor(el); });
+          lista.appendChild(item);
+        });
+      } catch (e) { lista.innerHTML = `<div class="grupo-sugestao-vazia">${esc(e.message)}</div>`; }
+    }, 300);
+    input.addEventListener('input', buscar);
+    input.addEventListener('blur', () => setTimeout(() => { lista.hidden = true; }, 150));
+    const caixa = document.createElement('div');
+    caixa.className = 'grupos-busca-campo';
+    caixa.append(input, lista);
+    el.appendChild(caixa);
+  }
+
+  /* ---------- salvar ---------- */
+  async function salvarAlteracao() {
+    const botao = document.getElementById('btn-salvar');
+    const resumo = p => p ? { sam: p.sam, nome: p.nome } : null;
+    const corpo = {
+      colaborador: colabEscolhido && { sam: colabEscolhido.sam, nome: colabEscolhido.nome, cpf: colabEscolhido.cpf, setor: colabEscolhido.setor, email: colabEscolhido.email },
+      itens: itensDoFormulario(),
+      gestor: resumo(pessoas.gestor),
+      aprovador_gp: resumo(pessoas.aprovador_gp),
+      data_solicitacao: document.getElementById('data-solicitacao').value,
+      possui_formulario: document.getElementById('possui-formulario').checked,
+      motivo: document.getElementById('motivo').value,
+    };
+    botao.disabled = true;
+    try {
+      const r = await fetch(URL_CRIAR, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const d = await r.json();
+      if (!r.ok) { mostrarToast(d.erro || 'Falha ao salvar.', 'erro'); botao.disabled = false; return; }
+      mostrarToast(d.mensagem, 'sucesso');
+      setTimeout(() => window.location.reload(), 700);
+    } catch (e) {
+      mostrarToast('Falha ao salvar.', 'erro');
+      botao.disabled = false;
+    }
+  }
+
+  /* ---------- cancelar ---------- */
+  async function cancelarSolicitacao(id, botao) {
+    const s = SOLICITACOES.find(x => x.id === id);
+    if (!confirm(`Cancelar a alteração de horário de ${s ? s.nome : 'este colaborador'}? Se estiver valendo hoje, o horário original volta na hora.`)) return;
+    botao.disabled = true;
+    const r = await fetch("{{ url_for('painel.api_alteracoes_horario_cancelar', id_solicitacao='__ID__') }}".replace('__ID__', id), { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { mostrarToast(d.erro || 'Falha ao cancelar.', 'erro'); botao.disabled = false; return; }
+    mostrarToast(d.mensagem, 'sucesso');
+    setTimeout(() => window.location.reload(), 900);
+  }
+
+  /* ---------- detalhes ---------- */
+  function formatarQuando(iso) {
+    if (!iso) return '';
+    const [d, h] = iso.split('T');
+    const [a, m, dia] = d.split('-');
+    return `${dia}/${m}/${a} ${(h || '').slice(0, 5)}`;
+  }
+
+  function abrirDetalhes(id) {
+    const s = SOLICITACOES.find(x => x.id === id);
+    if (!s) return;
+    document.getElementById('det-nome').textContent = s.nome;
+    document.getElementById('det-sub').textContent = [s.sam, s.setor].filter(Boolean).join(' · ');
+    const linhas = s.itens.map(i => {
+      let estado = 'Agendada';
+      if (i.observacao) estado = i.observacao;
+      else if (i.restaurado_em) estado = `Liberada e restaurada (${formatarQuando(i.restaurado_em)})`;
+      else if (i.aplicado_em) estado = `Valendo desde ${formatarQuando(i.aplicado_em)}`;
+      return `<tr><td>${esc(i.data_br)}</td><td class="mono">${esc(i.inicio)}–${esc(i.fim)}</td><td class="mono">${esc(i.faixa_ad)}</td><td>${esc(estado)}</td></tr>`;
+    }).join('');
+    const det = (r, v) => `<div class="detalhe-linha"><span class="detalhe-rotulo">${r}</span><span>${v}</span></div>`;
+    document.getElementById('det-corpo').innerHTML = `
+      ${s.erro ? `<div class="aviso aviso-erro">${esc(s.erro)}</div>` : ''}
+      <table class="tabela tabela-compacta"><thead><tr><th>Data</th><th>Pedido</th><th>No AD</th><th>Situação</th></tr></thead><tbody>${linhas}</tbody></table>
+      <div style="margin-top:14px;">
+        ${det('Gestor imediato', esc(s.gestor ? s.gestor.nome : '—'))}
+        ${det('Aprovação GP', esc(s.aprovador_gp ? s.aprovador_gp.nome : '—'))}
+        ${det('Formulário preenchido', s.possui_formulario ? 'Sim' : 'Não')}
+        ${det('Data da solicitação', esc(s.data_solicitacao_br || '—'))}
+        ${det('Observação', esc(s.motivo || '—'))}
+        ${det('Registrado por', `${esc(s.criado_por || '—')} em ${esc(formatarQuando(s.criado_em))}`)}
+      </div>
+      <div class="secao-titulo">Histórico</div>
+      <ul class="historico-lista">${(s.historico || []).slice().reverse().map(h => `<li><span class="mono">${esc(formatarQuando(h.quando))}</span> ${esc(h.texto)}</li>`).join('')}</ul>`;
+    document.getElementById('modal-detalhes').classList.add('aberto');
+  }
+  function fecharDetalhes() { document.getElementById('modal-detalhes').classList.remove('aberto'); }
+
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape') return;
+    if (document.getElementById('modal-horario-atual').classList.contains('aberto')) return fecharHorarioAtual();
+    fecharNovaAlteracao(); fecharDetalhes();
+  });
+</script>
+{% endblock %}

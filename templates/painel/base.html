@@ -87,6 +87,17 @@
           </span>
           Active Directory
         </a>
+        <a href="{{ url_for('painel.alteracoes_horario') }}" class="{{ 'ativo' if request.endpoint == 'painel.alteracoes_horario' else '' }}">
+          <span class="icon">
+            <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="9" cy="10" r="6.6" stroke="currentColor" stroke-width="1.4" fill="currentColor" fill-opacity="0.12"/>
+              <path d="M9 6.2V10l2.4 1.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="15.4" cy="14.8" r="3.4" fill="currentColor"/>
+              <path d="M15.4 13.2v3.2M13.8 14.8h3.2" stroke="var(--sidebar-bg, #004e4c)" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+          </span>
+          Alterações de horário
+        </a>
         <a href="{{ url_for('painel.google_workspace') }}" class="{{ 'ativo' if request.endpoint == 'painel.google_workspace' else '' }}">
           <span class="icon">
             <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">

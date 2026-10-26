@@ -49,3 +49,7 @@ giu_debug_*.html
 data/piramide_emails_*.json
 sondagem_*.txt
 giu_debug_*.png
+
+# Alteracoes de horario (dados de colaboradores)
+data/alteracoes_horario.json
+data/horarios_base.json

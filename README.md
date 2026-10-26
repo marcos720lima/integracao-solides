@@ -38,6 +38,7 @@ Além do webhook automático, o projeto tem um **painel web** (Flask, acessível
 | **Active Directory** | Busca/filtra usuários do AD (nome, status, setor, OU), com paginação. Ao abrir um colaborador: aba **Geral** (edição de nome, email, setor, PIN de impressora e CPF), aba **Horários liberados** (logon hours, com botão de predefinir horário administrativo) e aba **Senha** (redefinir senha, bloquear/desbloquear conta). Cobre também contas sem CPF vinculado (antigas ou genéricas) que não aparecem em Colaboradores |
 | **GIU Unimed** | Consulta por CPF/CNPJ via API oficial — status, último acesso e aplicações/papéis vinculados, em segundos. Ativar/inativar aciona o RPA (ver nota acima) |
 | **NextQS** | Consulta por email via API oficial — nome, email e perfil, em segundos. Status e ativar/inativar acionam o RPA (ver nota acima) |
+| **Alterações de horário** | Liberações de horário de logon no AD por data (ex.: 12:00–13:00 só em 23/10), somadas ao horário da pessoa e desfeitas sozinhas no dia seguinte. Registra gestor imediato, aprovação da Gestão de Pessoas, formulário e data da solicitação. Filtro por período e colaborador. Ver [Alterações de Horário](#alterações-de-horário-liberações-por-data) |
 | **Google Workspace** | Cards no topo (usuários totais, ativos, suspensos, licenças Business Starter livres) sempre visíveis. Abas: Usuários, Grupos de email (com membros), Unidades organizacionais e **Licenças** (em uso/livre por SKU, com botão para listar os colaboradores de cada uma). Cada usuário tem um botão de detalhes com aba **Geral** (nome, email, setor, cargo, unidade organizacional, licença atual) e aba **Grupos de email** (grupos que participa, com opção de adicionar a outro grupo ou remover) |
 | **Infomed** | Busca direta no banco Oracle do Infomed: ativar/inativar usuário, editar dados (nome/email), gerenciar perfis vinculados, corrigir preferências (expiração de senha, tentativas de login) |
 | **Pirâmide** | Via API oficial Pirâmide 360 (sem banco): pesquisa por nome/login/e-mail, ativar/inativar, redefinir senha (automática ou definida) e **novo acesso completo** em 3 passos — colaborador no Financeiro (próxima matrícula da filial), login no Administrador, Identificação Filial (SOLICITANTE) e empresas liberadas. Não entra no fluxo automático nem na ativação/inativação manual |
@@ -537,6 +538,18 @@ Rodar manualmente (ex.: pra testar sem esperar o horário):
 ```bash
 python tarefa_ferias.py
 ```
+
+## Alterações de Horário (liberações por data)
+
+Tela **Alterações de horário** (barra lateral, logo abaixo de Active Directory): registra liberações de horário de logon no AD por **data**. Exemplo: liberar 12:00–13:00 em 23/10/2026 para quem tem horário administrativo.
+
+- **As horas são somadas** ao horário da pessoa, nunca substituem. Quem tem 07:00-12:00, 14:00-18:00 na sexta e pede 12:00–13:00 fica com 07:00-13:00, 14:00-18:00 só naquele dia.
+- **Hora cheia:** o AD só aceita hora cheia, então o início arredonda pra baixo e o fim pra cima (12:00–13:30 vira 12:00–14:00). A tela mostra antes de salvar como vai ficar cada data.
+- **Como funciona com datas:** o AD só guarda um horário por dia da semana. O servidor mexe só na coluna do dia da semana da data pedida, e só enquanto a data vale. No dia seguinte, devolve o horário original. A verificação roda **dentro do servidor, a cada minuto** (não precisa de tarefa no Agendador). Se o servidor estiver desligado na virada do dia, corrige assim que voltar.
+- **Horário base:** guardado em `data/horarios_base.json` só enquanto há alteração valendo. Se alguém mudar o horário da pessoa durante a alteração (aba Horário ou direto no AD), esse vira o novo horário base, e é pra ele que volta no fim.
+- **Cancelar** uma solicitação que está valendo hoje restaura o horário original na hora.
+- **Campos registrados:** colaborador (solicitante), gestor ou supervisor imediato, aprovação da Gestão de Pessoas (os três buscados no AD), formulário preenchido (sim/não), data da solicitação, observação e quem registrou no painel. Ficam em `data/alteracoes_horario.json`, com histórico de cada liberação e restauração.
+- O horário do AD só bloqueia logins novos: quem já está logado quando o horário acaba não é derrubado.
 
 ## Logs
 

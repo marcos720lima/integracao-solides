@@ -562,3 +562,77 @@ def criar_usuario_ad(nome_completo, setor, username, email, cpf, senha, ou_desti
 
     conn.unbind()
     return True, "Usuário criado com sucesso no AD.", dn
+
+
+def _escapar_ldap(valor: str) -> str:
+    return (valor or "").replace("\\", "\\5c").replace("(", "\\28").replace(")", "\\29").replace("*", "\\2a")
+
+
+def _logon_hours_em_bytes(valor):
+    """Normaliza o logonHours vindo do ldap3 (lista, bytes ou texto) para
+    bytes de 21 posicoes. None quando o atributo nao existe (sem restricao)."""
+    if not valor:
+        return None
+    bruto = valor[0] if isinstance(valor, (list, tuple)) else valor
+    if isinstance(bruto, str):
+        bruto = bruto.encode("utf-8")
+    if not isinstance(bruto, (bytes, bytearray)) or len(bruto) != 21:
+        return None
+    return bytes(bruto)
+
+
+def ad_obter_logon_hours_raw(sam: str):
+    """(encontrado, bytes_ou_None). bytes None = conta sem restricao de horario."""
+    conn, base_dn = _conexao_ad()
+    conn.search(
+        search_base=base_dn,
+        search_filter=f"(&(objectCategory=person)(objectClass=user)(sAMAccountName={_escapar_ldap(sam)}))",
+        search_scope=SUBTREE, attributes=["logonHours"], size_limit=2,
+    )
+    if len(conn.entries) != 1:
+        conn.unbind()
+        return False, None
+    valor = _logon_hours_em_bytes(conn.entries[0].entry_attributes_as_dict.get("logonHours"))
+    conn.unbind()
+    return True, valor
+
+
+def ad_buscar_para_horario(termo: str, utc_offset_hours: int, limite: int = 30) -> List[dict]:
+    """Busca colaboradores no AD por nome, login, CPF (employeeID), setor
+    (description) ou email - usada na tela de alteracoes de horario."""
+    q = _escapar_ldap((termo or "").strip())
+    if len(q) < 2:
+        return []
+    filtro = (
+        "(&(objectCategory=person)(objectClass=user)"
+        f"(|(displayName=*{q}*)(sAMAccountName=*{q}*)(employeeID=*{q}*)"
+        f"(description=*{q}*)(mail=*{q}*)))"
+    )
+    conn, base_dn = _conexao_ad()
+    conn.search(
+        search_base=base_dn, search_filter=filtro, search_scope=SUBTREE,
+        attributes=["displayName", "sAMAccountName", "mail", "employeeID", "description",
+                    "userAccountControl", "logonHours"],
+        size_limit=limite,
+    )
+    resultado = []
+    for entry in conn.entries:
+        e = entry.entry_attributes_as_dict
+
+        def _primeiro(campo):
+            valor = e.get(campo)
+            return (valor or [""])[0] if isinstance(valor, list) else (valor or "")
+
+        uac = e.get("userAccountControl")
+        resultado.append({
+            "nome": _primeiro("displayName") or _primeiro("sAMAccountName"),
+            "sam": _primeiro("sAMAccountName"),
+            "email": _primeiro("mail"),
+            "cpf": _primeiro("employeeID"),
+            "setor": _primeiro("description"),
+            "desativado": bool(int(uac[0]) & 2) if isinstance(uac, list) and uac else False,
+            "horario": decode_logon_hours(e.get("logonHours"), utc_offset_hours),
+        })
+    conn.unbind()
+    resultado.sort(key=lambda u: (u["nome"] or "").lower())
+    return resultado

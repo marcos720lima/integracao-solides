@@ -13,6 +13,8 @@ from painel.ad_gestao import (
     ad_buscar_por_sam,
     ad_buscar_detalhes_por_sam,
     ad_atualizar_dados_gerais,
+    ad_buscar_para_horario,
+    ad_obter_logon_hours_raw,
     ad_definir_bloqueio,
     ad_redefinir_senha,
     ad_search_users,
@@ -91,6 +93,7 @@ from painel.utils import (
     sugerir_login,
 )
 from painel.webhooks import listar_webhooks, reprocessar_webhook
+from painel import alteracoes_horario
 
 painel_bp = Blueprint(
     "painel",
@@ -936,6 +939,111 @@ def api_ad_definir_horario_ajax():
     except Exception as e:
         return jsonify({"erro": str(e)}), 502
 
+    if not ok:
+        return jsonify({"erro": mensagem}), 400
+
+    # se a pessoa tem alteracao de horario valendo hoje, o horario salvo aqui
+    # vira o novo horario base e as horas extras de hoje sao somadas de novo
+    try:
+        alteracoes_horario.reconciliar_colaborador(sam)
+    except Exception as e:
+        print(f"[HORARIO] Aviso: não foi possível reaplicar alterações de horário de {sam}: {e}")
+    return jsonify({"mensagem": mensagem})
+
+
+# ---------------------------------------------------------------------------
+# Alteracoes de horario (liberacoes por data)
+# ---------------------------------------------------------------------------
+
+@painel_bp.route("/alteracoes-horario", endpoint="alteracoes_horario")
+@login_obrigatorio
+def tela_alteracoes_horario():
+    de = (request.args.get("de") or "").strip() or None
+    ate = (request.args.get("ate") or "").strip() or None
+    colaborador = (request.args.get("colaborador") or "").strip()
+    solicitacoes = alteracoes_horario.listar(de=de, ate=ate, colaborador=colaborador)
+    return render_template(
+        "alteracoes_horario.html",
+        solicitacoes=solicitacoes, de=de or "", ate=ate or "", colaborador=colaborador,
+        filtro_ativo=bool(de or ate or colaborador), hoje=alteracoes_horario.hoje_local().isoformat(),
+    )
+
+
+@painel_bp.route("/api/alteracoes-horario/buscar-ad")
+@login_obrigatorio
+def api_alteracoes_horario_buscar_ad():
+    termo = (request.args.get("q") or "").strip()
+    if len(termo) < 2:
+        return jsonify({"usuarios": []})
+    try:
+        return jsonify({"usuarios": ad_buscar_para_horario(termo, UTC_OFFSET_HOURS)})
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o Active Directory: {e}"}), 502
+
+
+@painel_bp.route("/api/alteracoes-horario/previa", methods=["POST"])
+@login_obrigatorio
+def api_alteracoes_horario_previa():
+    dados = request.get_json(silent=True) or {}
+    sam = (dados.get("sam") or "").strip()
+    itens, erros = alteracoes_horario.validar_itens(dados.get("itens"))
+    if not sam:
+        return jsonify({"erro": "Colaborador não informado."}), 400
+    try:
+        resultado = alteracoes_horario.previa(sam, itens) if itens else {"sem_restricao": False, "linhas": []}
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 502
+    resultado["erros"] = erros
+    return jsonify(resultado)
+
+
+@painel_bp.route("/api/alteracoes-horario", methods=["POST"])
+@login_obrigatorio
+def api_alteracoes_horario_criar():
+    dados = request.get_json(silent=True) or {}
+    colaborador = dados.get("colaborador") or {}
+    gestor = dados.get("gestor") or {}
+    aprovador = dados.get("aprovador_gp") or {}
+    data_solicitacao = (dados.get("data_solicitacao") or "").strip()
+
+    erros = []
+    if not colaborador.get("sam"):
+        erros.append("Escolha o colaborador.")
+    if not gestor.get("sam"):
+        erros.append("Informe o gestor ou supervisor imediato.")
+    if not aprovador.get("sam"):
+        erros.append("Informe quem aprovou na Gestão de Pessoas.")
+    try:
+        date.fromisoformat(data_solicitacao)
+    except ValueError:
+        erros.append("Informe a data da solicitação.")
+    itens, erros_itens = alteracoes_horario.validar_itens(dados.get("itens"))
+    erros.extend(erros_itens)
+    if erros:
+        return jsonify({"erro": " ".join(erros)}), 400
+
+    try:
+        encontrado, _ = ad_obter_logon_hours_raw(colaborador["sam"])
+    except Exception as e:
+        return jsonify({"erro": f"Falha ao consultar o Active Directory: {e}"}), 502
+    if not encontrado:
+        return jsonify({"erro": f"Usuário {colaborador['sam']} não encontrado no AD."}), 400
+
+    usuario = (session.get("usuario") or {}).get("login", "")
+    registro = alteracoes_horario.criar_solicitacao(
+        colaborador, itens, dados.get("motivo"), usuario,
+        gestor=gestor, aprovador_gp=aprovador,
+        possui_formulario=bool(dados.get("possui_formulario")),
+        data_solicitacao=data_solicitacao,
+    )
+    return jsonify({"mensagem": "Alteração de horário registrada.", "id": registro["id"]})
+
+
+@painel_bp.route("/api/alteracoes-horario/<id_solicitacao>/cancelar", methods=["POST"])
+@login_obrigatorio
+def api_alteracoes_horario_cancelar(id_solicitacao):
+    usuario = (session.get("usuario") or {}).get("login", "")
+    ok, mensagem = alteracoes_horario.cancelar_solicitacao(id_solicitacao, usuario)
     if not ok:
         return jsonify({"erro": mensagem}), 400
     return jsonify({"mensagem": mensagem})

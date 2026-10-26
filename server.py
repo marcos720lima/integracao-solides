@@ -265,6 +265,11 @@ def _iniciar_tarefas_de_fundo():
         iniciar_atualizacao_periodica()
     except Exception as e:
         logger.warning(f"[CACHE] Não foi possível iniciar a atualização do Tangerino: {e}")
+    try:
+        from painel.alteracoes_horario import iniciar_laco
+        iniciar_laco()
+    except Exception as e:
+        logger.warning(f"[HORARIO] Não foi possível iniciar as alterações de horário: {e}")
 
 
 @app.before_request
