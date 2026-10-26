@@ -53,3 +53,4 @@ giu_debug_*.png
 # Alteracoes de horario (dados de colaboradores)
 data/alteracoes_horario.json
 data/horarios_base.json
+data/anexos_horario/

@@ -77,7 +77,7 @@
           <td class="celula-aprovacao">
             <div><span>Gestor</span> {{ s.gestor.nome if s.gestor else '—' }}</div>
             <div><span>GP</span> {{ s.aprovador_gp.nome if s.aprovador_gp else '—' }}</div>
-            <div><span>Formulário</span> {{ 'Sim' if s.possui_formulario else 'Não' }}</div>
+            <div><span>Formulário</span> {% if s.possui_formulario %}Sim{% if s.anexos %} · <a href="#" class="link-anexo-tabela" onclick="abrirDetalhes('{{ s.id }}'); return false;">ver anexo{{ 's' if s.anexos|length > 1 }}</a>{% endif %}{% else %}Não{% endif %}</div>
           </td>
           <td>{{ s.data_solicitacao_br or '—' }}</td>
           <td><span class="badge badge-{{ st[1] }}" {% if s.erro %}title="{{ s.erro }}"{% endif %}>{{ st[0] }}</span></td>
@@ -168,6 +168,15 @@
             <input type="checkbox" id="possui-formulario"> Possui formulário preenchido
           </label>
         </div>
+        <div class="campo full" id="campo-anexos" hidden>
+          <label>Formulário preenchido <span class="obrigatorio">*</span> <span style="font-weight:400; color:var(--text-muted);">(PDF, PNG ou JPG · até 10 MB cada · até 5 arquivos)</span></label>
+          <label class="area-anexo" id="area-anexo" for="input-anexos">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1 12.2 20.3a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
+            <span><strong>Clique para anexar</strong> ou arraste o arquivo aqui</span>
+          </label>
+          <input type="file" id="input-anexos" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" multiple hidden>
+          <div class="lista-anexos" id="lista-anexos"></div>
+        </div>
         <div class="campo full">
           <label for="motivo">Observação <span style="font-weight:400; color:var(--text-muted);">(opcional — ex.: nº do chamado no GLPI)</span></label>
           <input type="text" id="motivo" maxlength="300">
@@ -198,6 +207,24 @@
   </div>
 </div>
 
+<!-- ============ VISUALIZAR FORMULÁRIO (card sobre card) ============ -->
+<div class="modal-overlay modal-sobreposto" id="modal-anexo" onclick="if (event.target === this) fecharAnexo()">
+  <div class="modal-card modal-card-visualizador">
+    <div class="modal-header">
+      <div style="min-width:0;">
+        <div class="modal-titulo">Formulário</div>
+        <div class="modal-subtitulo" id="anexo-nome">—</div>
+      </div>
+      <div class="visualizador-acoes">
+        <a class="btn-limpar-filtros" id="anexo-nova-aba" target="_blank" rel="noopener">Abrir em nova aba</a>
+        <a class="btn-limpar-filtros" id="anexo-baixar" download>Baixar</a>
+        <button type="button" class="modal-fechar" onclick="fecharAnexo()">&times;</button>
+      </div>
+    </div>
+    <div class="visualizador-corpo" id="anexo-corpo"></div>
+  </div>
+</div>
+
 <!-- ============ DETALHES ============ -->
 <div class="modal-overlay" id="modal-detalhes" onclick="if (event.target === this) fecharDetalhes()">
   <div class="modal-card">
@@ -220,9 +247,14 @@
   const URL_BUSCA = "{{ url_for('painel.api_alteracoes_horario_buscar_ad') }}";
   const URL_PREVIA = "{{ url_for('painel.api_alteracoes_horario_previa') }}";
   const URL_CRIAR = "{{ url_for('painel.api_alteracoes_horario_criar') }}";
+  const URL_ANEXO = "{{ url_for('painel.alteracoes_horario_anexo', id_solicitacao='__S__', id_anexo='__A__') }}";
   const DIAS = [['Dom', 'Domingo'], ['Seg', 'Segunda'], ['Ter', 'Terça'], ['Qua', 'Quarta'], ['Qui', 'Quinta'], ['Sex', 'Sexta'], ['Sáb', 'Sábado']];
 
   let colabEscolhido = null;
+  let anexosSelecionados = [];
+  const ANEXO_MAX_BYTES = 10 * 1024 * 1024;
+  const ANEXO_MAX_QTD = 5;
+  const ANEXO_TIPOS = ['application/pdf', 'image/png', 'image/jpeg'];
   const pessoas = { gestor: null, aprovador_gp: null };
 
   function esc(t) { const d = document.createElement('div'); d.textContent = t ?? ''; return d.innerHTML; }
@@ -253,6 +285,9 @@
     adicionarLinha();
     document.getElementById('motivo').value = '';
     document.getElementById('possui-formulario').checked = false;
+    anexosSelecionados = [];
+    renderizarAnexos();
+    document.getElementById('campo-anexos').hidden = true;
     document.getElementById('data-solicitacao').value = HOJE;
     document.getElementById('busca-colab').value = '';
     document.getElementById('resultados-colab').innerHTML = '<div class="resultados-ad-vazio">Digite pelo menos 2 letras para buscar.</div>';
@@ -425,6 +460,58 @@
     el.appendChild(caixa);
   }
 
+  /* ---------- anexos do formulário ---------- */
+  function tamanhoLegivel(bytes) {
+    return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  function adicionarAnexos(arquivos) {
+    for (const arquivo of arquivos) {
+      const ext = (arquivo.name.split('.').pop() || '').toLowerCase();
+      const tipoOk = ANEXO_TIPOS.includes(arquivo.type) || ['pdf', 'png', 'jpg', 'jpeg'].includes(ext);
+      if (!tipoOk) { mostrarToast(`${arquivo.name}: só são aceitos PDF, PNG ou JPG.`, 'erro'); continue; }
+      if (arquivo.size > ANEXO_MAX_BYTES) { mostrarToast(`${arquivo.name}: maior que 10 MB.`, 'erro'); continue; }
+      if (anexosSelecionados.length >= ANEXO_MAX_QTD) { mostrarToast(`No máximo ${ANEXO_MAX_QTD} arquivos.`, 'erro'); break; }
+      if (anexosSelecionados.some(a => a.name === arquivo.name && a.size === arquivo.size)) continue;
+      anexosSelecionados.push(arquivo);
+      document.getElementById('area-anexo').classList.remove('anexo-faltando');
+    }
+    renderizarAnexos();
+  }
+
+  function renderizarAnexos() {
+    const lista = document.getElementById('lista-anexos');
+    lista.innerHTML = '';
+    anexosSelecionados.forEach((arquivo, i) => {
+      const item = document.createElement('div');
+      item.className = 'anexo-item';
+      const ext = (arquivo.name.split('.').pop() || '').toUpperCase();
+      item.innerHTML = `<span class="anexo-tipo">${esc(ext === 'JPEG' ? 'JPG' : ext)}</span>
+        <span class="anexo-nome">${esc(arquivo.name)}</span>
+        <span class="anexo-tamanho">${tamanhoLegivel(arquivo.size)}</span>`;
+      const remover = document.createElement('button');
+      remover.type = 'button';
+      remover.className = 'btn-icone btn-icone-perigo';
+      remover.title = 'Remover arquivo';
+      remover.innerHTML = '&times;';
+      remover.addEventListener('click', () => { anexosSelecionados.splice(i, 1); renderizarAnexos(); });
+      item.appendChild(remover);
+      lista.appendChild(item);
+    });
+  }
+
+  document.getElementById('possui-formulario').addEventListener('change', ev => {
+    document.getElementById('campo-anexos').hidden = !ev.target.checked;
+  });
+  document.getElementById('input-anexos').addEventListener('change', ev => {
+    adicionarAnexos(ev.target.files);
+    ev.target.value = '';
+  });
+  const areaAnexo = document.getElementById('area-anexo');
+  ['dragenter', 'dragover'].forEach(t => areaAnexo.addEventListener(t, ev => { ev.preventDefault(); areaAnexo.classList.add('arrastando'); }));
+  ['dragleave', 'drop'].forEach(t => areaAnexo.addEventListener(t, ev => { ev.preventDefault(); areaAnexo.classList.remove('arrastando'); }));
+  areaAnexo.addEventListener('drop', ev => adicionarAnexos(ev.dataTransfer.files));
+
   /* ---------- salvar ---------- */
   async function salvarAlteracao() {
     const botao = document.getElementById('btn-salvar');
@@ -438,9 +525,17 @@
       possui_formulario: document.getElementById('possui-formulario').checked,
       motivo: document.getElementById('motivo').value,
     };
+    if (corpo.possui_formulario && !anexosSelecionados.length) {
+      mostrarToast('Anexe o formulário preenchido (PDF, PNG ou JPG) para continuar.', 'erro');
+      document.getElementById('area-anexo').classList.add('anexo-faltando');
+      return;
+    }
+    const envio = new FormData();
+    envio.append('dados', JSON.stringify(corpo));
+    if (corpo.possui_formulario) anexosSelecionados.forEach(a => envio.append('anexos', a, a.name));
     botao.disabled = true;
     try {
-      const r = await fetch(URL_CRIAR, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const r = await fetch(URL_CRIAR, { method: 'POST', body: envio });
       const d = await r.json();
       if (!r.ok) { mostrarToast(d.erro || 'Falha ao salvar.', 'erro'); botao.disabled = false; return; }
       mostrarToast(d.mensagem, 'sucesso');
@@ -495,14 +590,56 @@
         ${det('Observação', esc(s.motivo || '—'))}
         ${det('Registrado por', `${esc(s.criado_por || '—')} em ${esc(formatarQuando(s.criado_em))}`)}
       </div>
+      ${(s.anexos || []).length ? `<div class="secao-titulo">Formulário anexado</div><div class="lista-anexos">${s.anexos.map(a => `
+        <div class="anexo-item">
+          <span class="anexo-tipo">${esc(a.tipo.toUpperCase())}</span>
+          <span class="anexo-nome">${esc(a.nome_original)}</span>
+          <span class="anexo-tamanho">${tamanhoLegivel(a.tamanho)}</span>
+          <button type="button" class="btn-secundario" onclick="visualizarAnexo('${s.id}', '${a.id}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span>Visualizar</span>
+          </button>
+        </div>`).join('')}</div>` : ''}
       <div class="secao-titulo">Histórico</div>
       <ul class="historico-lista">${(s.historico || []).slice().reverse().map(h => `<li><span class="mono">${esc(formatarQuando(h.quando))}</span> ${esc(h.texto)}</li>`).join('')}</ul>`;
     document.getElementById('modal-detalhes').classList.add('aberto');
   }
+  function visualizarAnexo(idSolicitacao, idAnexo) {
+    const s = SOLICITACOES.find(x => x.id === idSolicitacao);
+    const a = s && (s.anexos || []).find(x => x.id === idAnexo);
+    if (!a) return;
+    const url = URL_ANEXO.replace('__S__', idSolicitacao).replace('__A__', idAnexo);
+    document.getElementById('anexo-nome').textContent = a.nome_original;
+    document.getElementById('anexo-nova-aba').href = url;
+    const baixar = document.getElementById('anexo-baixar');
+    baixar.href = url;
+    baixar.setAttribute('download', a.nome_original);
+    const corpo = document.getElementById('anexo-corpo');
+    corpo.innerHTML = '';
+    if (a.tipo === 'pdf') {
+      const frame = document.createElement('iframe');
+      frame.src = url;
+      frame.title = a.nome_original;
+      corpo.appendChild(frame);
+    } else {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = a.nome_original;
+      corpo.appendChild(img);
+    }
+    document.getElementById('modal-anexo').classList.add('aberto');
+  }
+
+  function fecharAnexo() {
+    document.getElementById('modal-anexo').classList.remove('aberto');
+    document.getElementById('anexo-corpo').innerHTML = '';
+  }
+
   function fecharDetalhes() { document.getElementById('modal-detalhes').classList.remove('aberto'); }
 
   document.addEventListener('keydown', ev => {
     if (ev.key !== 'Escape') return;
+    if (document.getElementById('modal-anexo').classList.contains('aberto')) return fecharAnexo();
     if (document.getElementById('modal-horario-atual').classList.contains('aberto')) return fecharHorarioAtual();
     fecharNovaAlteracao(); fecharDetalhes();
   });

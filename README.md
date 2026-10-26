@@ -549,6 +549,7 @@ Tela **Alterações de horário** (barra lateral, logo abaixo de Active Director
 - **Horário base:** guardado em `data/horarios_base.json` só enquanto há alteração valendo. Se alguém mudar o horário da pessoa durante a alteração (aba Horário ou direto no AD), esse vira o novo horário base, e é pra ele que volta no fim.
 - **Cancelar** uma solicitação que está valendo hoje restaura o horário original na hora.
 - **Campos registrados:** colaborador (solicitante), gestor ou supervisor imediato, aprovação da Gestão de Pessoas (os três buscados no AD), formulário preenchido (sim/não), data da solicitação, observação e quem registrou no painel. Ficam em `data/alteracoes_horario.json`, com histórico de cada liberação e restauração.
+- **Formulário anexado:** ao marcar "Possui formulário preenchido", anexar o formulário passa a ser obrigatório (PDF, PNG ou JPG, até 10 MB cada, até 5 arquivos). O servidor confere o conteúdo real do arquivo, não só a extensão. Os arquivos ficam em `data/anexos_horario/<id da solicitação>/` (ou na pasta de `ANEXOS_HORARIO_DIR`) e abrem num visualizador dentro do painel, só para quem está logado. Essa pasta não vai pro Git e precisa entrar no backup da VM
 - O horário do AD só bloqueia logins novos: quem já está logado quando o horário acaba não é derrubado.
 
 ## Logs

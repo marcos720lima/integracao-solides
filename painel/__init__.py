@@ -4,7 +4,7 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from painel.ad_gestao import (
     DAY_INPUTS,
@@ -1000,7 +1000,15 @@ def api_alteracoes_horario_previa():
 @painel_bp.route("/api/alteracoes-horario", methods=["POST"])
 @login_obrigatorio
 def api_alteracoes_horario_criar():
-    dados = request.get_json(silent=True) or {}
+    # com anexo o navegador manda multipart (campo "dados" com o JSON + arquivos)
+    if request.form.get("dados"):
+        try:
+            dados = json.loads(request.form["dados"])
+        except ValueError:
+            return jsonify({"erro": "Dados inválidos."}), 400
+    else:
+        dados = request.get_json(silent=True) or {}
+    possui_formulario = bool(dados.get("possui_formulario"))
     colaborador = dados.get("colaborador") or {}
     gestor = dados.get("gestor") or {}
     aprovador = dados.get("aprovador_gp") or {}
@@ -1019,6 +1027,12 @@ def api_alteracoes_horario_criar():
         erros.append("Informe a data da solicitação.")
     itens, erros_itens = alteracoes_horario.validar_itens(dados.get("itens"))
     erros.extend(erros_itens)
+    anexos, erros_anexos = alteracoes_horario.validar_anexos(request.files.getlist("anexos"))
+    erros.extend(erros_anexos)
+    if possui_formulario and not anexos and not erros_anexos:
+        erros.append("Anexe o formulário preenchido (PDF, PNG ou JPG).")
+    if not possui_formulario:
+        anexos = []
     if erros:
         return jsonify({"erro": " ".join(erros)}), 400
 
@@ -1030,13 +1044,30 @@ def api_alteracoes_horario_criar():
         return jsonify({"erro": f"Usuário {colaborador['sam']} não encontrado no AD."}), 400
 
     usuario = (session.get("usuario") or {}).get("login", "")
-    registro = alteracoes_horario.criar_solicitacao(
-        colaborador, itens, dados.get("motivo"), usuario,
-        gestor=gestor, aprovador_gp=aprovador,
-        possui_formulario=bool(dados.get("possui_formulario")),
-        data_solicitacao=data_solicitacao,
-    )
+    try:
+        registro = alteracoes_horario.criar_solicitacao(
+            colaborador, itens, dados.get("motivo"), usuario,
+            gestor=gestor, aprovador_gp=aprovador,
+            possui_formulario=possui_formulario,
+            data_solicitacao=data_solicitacao,
+            anexos=anexos,
+        )
+    except OSError as e:
+        return jsonify({"erro": f"Não foi possível salvar o formulário na pasta de anexos: {e}"}), 500
     return jsonify({"mensagem": "Alteração de horário registrada.", "id": registro["id"]})
+
+
+@painel_bp.route("/alteracoes-horario/<id_solicitacao>/anexos/<id_anexo>")
+@login_obrigatorio
+def alteracoes_horario_anexo(id_solicitacao, id_anexo):
+    encontrado = alteracoes_horario.caminho_anexo(id_solicitacao, id_anexo)
+    if not encontrado:
+        abort(404)
+    caminho, mimetype, nome = encontrado
+    resposta = send_file(caminho, mimetype=mimetype, as_attachment=False, download_name=nome)
+    resposta.headers["X-Content-Type-Options"] = "nosniff"
+    resposta.headers["Cache-Control"] = "private, no-store"
+    return resposta
 
 
 @painel_bp.route("/api/alteracoes-horario/<id_solicitacao>/cancelar", methods=["POST"])

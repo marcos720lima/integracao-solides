@@ -240,10 +240,113 @@ def _pessoa(p):
     return {"sam": p["sam"], "nome": p.get("nome") or p["sam"]}
 
 
+# ------------------------------------------------------------------- anexos
+
+TIPOS_ANEXO = {
+    "pdf": ("application/pdf", (b"%PDF-",)),
+    "png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
+    "jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
+}
+MAX_ANEXOS = 5
+
+
+def _tamanho_maximo_anexo():
+    try:
+        return max(1, int(os.getenv("ANEXO_MAX_MB", "10"))) * 1024 * 1024
+    except ValueError:
+        return 10 * 1024 * 1024
+
+
+def pasta_anexos():
+    """Pasta onde os formularios ficam guardados. Padrao: data/anexos_horario
+    na propria VM. Pode apontar para um compartilhamento de rede com backup
+    (ANEXOS_HORARIO_DIR no .env, ex.: \\\\TULIPA\\TI\\anexos_horario)."""
+    configurada = os.getenv("ANEXOS_HORARIO_DIR", "").strip()
+    if configurada:
+        return configurada
+    from server import DATA_DIR
+    return os.path.join(DATA_DIR, "anexos_horario")
+
+
+def validar_anexos(arquivos):
+    """Le e valida os arquivos enviados. Confere o conteudo real (nao so a
+    extensao): so aceita PDF, PNG e JPG. Retorna (lista_validada, erros)."""
+    validados, erros = [], []
+    arquivos = [a for a in (arquivos or []) if a and getattr(a, "filename", "")]
+    if len(arquivos) > MAX_ANEXOS:
+        return [], [f"Envie no máximo {MAX_ANEXOS} arquivos."]
+    limite = _tamanho_maximo_anexo()
+    for arquivo in arquivos:
+        nome = os.path.basename(arquivo.filename.replace("\\", "/"))[:150] or "arquivo"
+        conteudo = arquivo.read(limite + 1)
+        if len(conteudo) > limite:
+            erros.append(f"{nome}: maior que {limite // (1024 * 1024)} MB.")
+            continue
+        if not conteudo:
+            erros.append(f"{nome}: arquivo vazio.")
+            continue
+        tipo = next((ext for ext, (_, assinaturas) in TIPOS_ANEXO.items()
+                     if any(conteudo.startswith(a) for a in assinaturas)), None)
+        if not tipo:
+            erros.append(f"{nome}: só são aceitos PDF, PNG ou JPG.")
+            continue
+        validados.append({"nome": nome, "tipo": tipo, "conteudo": conteudo})
+    return validados, erros
+
+
+def _gravar_anexos(id_solicitacao, validados, enviado_por):
+    if not validados:
+        return []
+    pasta = os.path.join(pasta_anexos(), id_solicitacao)
+    os.makedirs(pasta, exist_ok=True)
+    registros = []
+    try:
+        for anexo in validados:
+            id_anexo = uuid.uuid4().hex[:12]
+            arquivo = f"{id_anexo}.{anexo['tipo']}"
+            with open(os.path.join(pasta, arquivo), "wb") as f:
+                f.write(anexo["conteudo"])
+            registros.append({
+                "id": id_anexo,
+                "arquivo": arquivo,
+                "nome_original": anexo["nome"],
+                "tipo": anexo["tipo"],
+                "tamanho": len(anexo["conteudo"]),
+                "enviado_por": enviado_por or "",
+                "enviado_em": _agora_iso(),
+            })
+    except Exception:
+        for r in registros:
+            try:
+                os.remove(os.path.join(pasta, r["arquivo"]))
+            except OSError:
+                pass
+        raise
+    return registros
+
+
+def caminho_anexo(id_solicitacao, id_anexo):
+    """(caminho, mimetype, nome_original) de um anexo, ou None. O caminho vem
+    sempre do registro salvo, nunca do que o navegador mandou."""
+    with _lock:
+        s = next((x for x in _carregar_solicitacoes() if x["id"] == id_solicitacao), None)
+    if not s:
+        return None
+    anexo = next((a for a in s.get("anexos", []) if a["id"] == id_anexo), None)
+    if not anexo:
+        return None
+    caminho = os.path.join(pasta_anexos(), s["id"], anexo["arquivo"])
+    if not os.path.isfile(caminho):
+        return None
+    return caminho, TIPOS_ANEXO[anexo["tipo"]][0], anexo["nome_original"]
+
+
 def criar_solicitacao(colaborador, itens, motivo, criado_por, gestor=None, aprovador_gp=None,
-                      possui_formulario=False, data_solicitacao=None):
+                      possui_formulario=False, data_solicitacao=None, anexos=None):
+    id_solicitacao = uuid.uuid4().hex[:12]
+    registros_anexos = _gravar_anexos(id_solicitacao, anexos or [], criado_por)
     registro = {
-        "id": uuid.uuid4().hex[:12],
+        "id": id_solicitacao,
         "sam": colaborador["sam"],
         "nome": colaborador.get("nome") or colaborador["sam"],
         "cpf": colaborador.get("cpf") or "",
@@ -254,6 +357,7 @@ def criar_solicitacao(colaborador, itens, motivo, criado_por, gestor=None, aprov
         "gestor": _pessoa(gestor),
         "aprovador_gp": _pessoa(aprovador_gp),
         "possui_formulario": bool(possui_formulario),
+        "anexos": registros_anexos,
         "data_solicitacao": data_solicitacao or hoje_local().isoformat(),
         "criado_por": criado_por or "",
         "criado_em": _agora_iso(),
