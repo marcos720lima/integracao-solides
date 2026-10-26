@@ -384,7 +384,7 @@ Configuração da tarefa: **"Se a tarefa já estiver sendo executada: Não inici
 2. encerra **todos** os processos `python ... waitress` (sem mexer em outros scripts Python) e confere que não sobrou nenhum;
 3. encerra o ngrok;
 4. executa a tarefa de novo;
-5. mostra quantos processos subiram (o normal é **2** do servidor — venv + python — e **1** do ngrok).
+5. espera o servidor responder em `http://127.0.0.1:3000/status` (até 60s — na VM a subida pode passar de 15s) e confere se o ngrok subiu.
 
 > Só "Finalizar" a tarefa no Agendador **não** basta: o servidor e o ngrok continuam abertos. Enquanto o ngrok estiver fechado, os webhooks do Solides não chegam — por isso o `.bat` faz tudo em sequência.
 >
