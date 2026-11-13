@@ -2021,6 +2021,7 @@ table.tabela tbody tr:last-child td { border-bottom: none; }
 
 .chip-data-valendo { border-color: transparent; background: var(--selo-andamento-bg); color: var(--selo-andamento-tx); font-weight: 600; }
 .chip-data-ok { border-color: transparent; background: var(--selo-sucesso-bg); color: var(--selo-sucesso-tx); }
+.chip-modo { margin-left: 4px; padding: 0 5px; border-radius: var(--raio-pill); background: var(--selo-aviso-bg, rgba(255,170,0,.18)); color: var(--selo-aviso-tx, #8a5b00); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; vertical-align: middle; }
 
 .celula-acoes { white-space: nowrap; text-align: right; }
 

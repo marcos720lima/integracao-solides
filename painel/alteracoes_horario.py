@@ -30,6 +30,7 @@ from painel.ad_gestao import (
     DAYS_PT,
     ad_obter_logon_hours_raw,
     ad_update_logon_hours_by_sam,
+    build_local_matrix,
     build_utc_bits_from_local,
     bytes_to_bits_lsb_first,
     decode_logon_hours,
@@ -136,21 +137,35 @@ def faixa_no_ad(inicio, fim):
     return (ini // 60, -(-fi // 60)), None
 
 
-def _bits_extras_do_dia(itens_do_dia, dia_semana):
-    """Bits UTC (168) com as horas extras de um dia da semana local."""
-    matriz = [[0] * 24 for _ in range(7)]
+def _pedido_do_dia(itens_do_dia):
+    """Linha local (24h) com as horas pedidas, unindo todos os itens do dia."""
+    pedido = [0] * 24
     for item in itens_do_dia:
         faixa, _ = faixa_no_ad(item["inicio"], item["fim"])
         if not faixa:
             continue
         for h in range(faixa[0], faixa[1]):
-            matriz[dia_semana][h] = 1
-    return build_utc_bits_from_local(matriz, _utc_offset())
+            pedido[h] = 1
+    return pedido
 
 
-def _somar(base_bytes, extras_bits):
-    bits = bytes_to_bits_lsb_first(base_bytes)
-    return hours_to_bits_bytes([1 if (a or b) else 0 for a, b in zip(bits, extras_bits)])
+def _dia_eh_substituir(itens_do_dia):
+    return any((item.get("modo") or "adicionar") == "substituir" for item in itens_do_dia)
+
+
+def _bytes_do_dia(base_bytes, itens_do_dia, dia_semana):
+    """Monta os bytes finais do horário para 'dia_semana' aplicando os itens
+    daquele dia. Feito em espaço LOCAL (matriz 7x24): no modo 'substituir' a
+    linha do dia vira só o pedido; no 'adicionar' soma (estende) o pedido ao
+    horário atual do dia. Os outros dias não são tocados."""
+    matriz = build_local_matrix(bytes_to_bits_lsb_first(base_bytes), _utc_offset())
+    pedido = _pedido_do_dia(itens_do_dia)
+    if _dia_eh_substituir(itens_do_dia):
+        matriz[dia_semana] = pedido
+    else:
+        matriz[dia_semana] = [1 if (a or b) else 0
+                              for a, b in zip(matriz[dia_semana], pedido)]
+    return hours_to_bits_bytes(build_utc_bits_from_local(matriz, _utc_offset()))
 
 
 def _texto_do_dia(bytes_horario, dia_semana):
@@ -169,6 +184,9 @@ def validar_itens(itens_brutos):
         data = (bruto.get("data") or "").strip()
         inicio = (bruto.get("inicio") or "").strip()
         fim = (bruto.get("fim") or "").strip()
+        modo = (bruto.get("modo") or "adicionar").strip().lower()
+        if modo not in ("adicionar", "substituir"):
+            modo = "adicionar"
         try:
             date.fromisoformat(data)
         except ValueError:
@@ -181,7 +199,7 @@ def validar_itens(itens_brutos):
         if erro:
             erros.append(f"Linha {n}: {erro}")
             continue
-        itens.append({"data": data, "inicio": inicio, "fim": fim})
+        itens.append({"data": data, "inicio": inicio, "fim": fim, "modo": modo})
     if not itens and not erros:
         erros.append("Adicione pelo menos uma data.")
     itens.sort(key=lambda i: (i["data"], i["inicio"]))
@@ -222,7 +240,7 @@ def previa(sam, itens):
         if base is None:
             fica = "Sem restrição (nada a alterar)"
         else:
-            fica = _texto_do_dia(_somar(base, _bits_extras_do_dia(por_data[data_iso], dia)), dia)
+            fica = _texto_do_dia(_bytes_do_dia(base, por_data[data_iso], dia), dia)
         linhas.append({
             "data": data_iso,
             "data_br": d.strftime("%d/%m/%Y"),
@@ -230,6 +248,7 @@ def previa(sam, itens):
             "pedido_no_ad": ", ".join(faixas),
             "atual": _texto_do_dia(base, dia),
             "vai_ficar": fica,
+            "substitui": _dia_eh_substituir(por_data[data_iso]),
         })
     return {"sem_restricao": base is None, "linhas": linhas}
 
@@ -530,8 +549,7 @@ def _reconciliar(sam, hoje):
         base = atual
 
     if pares:
-        extras = _bits_extras_do_dia([item for _, item in pares], _dia_semana_ad(hoje))
-        desejado = _somar(base, extras)
+        desejado = _bytes_do_dia(base, [item for _, item in pares], _dia_semana_ad(hoje))
     else:
         desejado = base
 

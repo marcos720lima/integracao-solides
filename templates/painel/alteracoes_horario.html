@@ -13,7 +13,7 @@
 <div class="page-header page-header-com-acao">
   <div>
     <h1>Alterações de horário</h1>
-    <p>Liberações de horário de logon no AD por data. As horas pedidas são somadas ao horário da pessoa e o horário original volta sozinho no dia seguinte.</p>
+    <p>Liberações de horário de logon no AD por data. As horas pedidas podem ser somadas (estende) ou trocar o horário do dia (substitui), e o horário original volta sozinho no dia seguinte.</p>
   </div>
   <button type="button" class="btn btn-primario" onclick="abrirNovaAlteracao()">+ Nova alteração</button>
 </div>
@@ -68,8 +68,8 @@
           <td>
             <div class="chips-datas">
               {% for i in s['itens'] %}
-              <span class="chip-data {{ 'chip-data-valendo' if i.aplicado_em and not i.restaurado_em and not i.observacao else ('chip-data-ok' if i.restaurado_em else '') }}" title="Pedido: {{ i.inicio }}–{{ i.fim }}">
-                {{ i.data_br[:5] }} · {{ i.faixa_ad }}
+              <span class="chip-data {{ 'chip-data-valendo' if i.aplicado_em and not i.restaurado_em and not i.observacao else ('chip-data-ok' if i.restaurado_em else '') }}" title="{{ 'Troca o horário do dia para' if i.modo == 'substituir' else 'Estende o horário em' }} {{ i.inicio }}–{{ i.fim }}">
+                {{ i.data_br[:5] }} · {{ i.faixa_ad }}{% if i.modo == 'substituir' %} <span class="chip-modo">troca</span>{% endif %}
               </span>
               {% endfor %}
             </div>
@@ -142,7 +142,14 @@
       </div>
 
       <div class="secao-titulo">Datas e horários a liberar</div>
-      <p class="secao-dica">As horas são somadas ao horário da pessoa. O AD só aceita hora cheia: o início arredonda pra baixo e o fim pra cima (13:30–14:30 vira 13:00–15:00).</p>
+      <div class="campo campo-modo">
+        <label for="modo-alteracao">O que fazer no dia</label>
+        <select id="modo-alteracao" onchange="aoTrocarModo()">
+          <option value="adicionar">Adicionar — estende o horário do dia (ex.: 07–12 mais 12–13 fica 07–13)</option>
+          <option value="substituir">Substituir — troca o horário do dia pelo que for pedido</option>
+        </select>
+      </div>
+      <p class="secao-dica" id="dica-modo">As horas são somadas ao horário da pessoa. O AD só aceita hora cheia: o início arredonda pra baixo e o fim pra cima (13:30–14:30 vira 13:00–15:00).</p>
       <div id="linhas-datas"></div>
       <button type="button" class="btn-limpar-filtros" onclick="adicionarLinha()">+ Adicionar data</button>
 
@@ -307,6 +314,8 @@
     colabEscolhido = null;
     pessoas.gestor = null; pessoas.aprovador_gp = null;
     document.querySelectorAll('.seletor-ad').forEach(montarSeletor);
+    document.getElementById('modo-alteracao').value = 'adicionar';
+    aoTrocarModo();
     document.getElementById('linhas-datas').innerHTML = '';
     adicionarLinha();
     document.getElementById('motivo').value = '';
@@ -401,11 +410,25 @@
     document.getElementById('linhas-datas').appendChild(linha);
   }
 
+  function modoAtual() {
+    return document.getElementById('modo-alteracao')?.value || 'adicionar';
+  }
+
+  function aoTrocarModo() {
+    const sub = modoAtual() === 'substituir';
+    document.getElementById('dica-modo').textContent = sub
+      ? 'O horário do dia é trocado pelo que for pedido (o horário normal daquele dia é ignorado só nessas datas). O AD só aceita hora cheia: o início arredonda pra baixo e o fim pra cima.'
+      : 'As horas são somadas ao horário da pessoa. O AD só aceita hora cheia: o início arredonda pra baixo e o fim pra cima (13:30–14:30 vira 13:00–15:00).';
+    atualizarPrevia();
+  }
+
   function itensDoFormulario() {
+    const modo = modoAtual();
     return [...document.querySelectorAll('.linha-data')].map(l => ({
       data: l.querySelector('.ld-data').value,
       inicio: l.querySelector('.ld-inicio').value,
       fim: l.querySelector('.ld-fim').value,
+      modo,
     })).filter(i => i.data || i.inicio || i.fim);
   }
 
@@ -424,7 +447,7 @@
       if (d.erros && d.erros.length) html += d.erros.map(e => `<div class="previa-erro">${esc(e)}</div>`).join('');
       html += d.linhas.map(l => `
         <div class="previa-linha">
-          <div class="previa-data">${esc(l.dia_semana)}, ${esc(l.data_br)} <span>libera ${esc(l.pedido_no_ad)}</span></div>
+          <div class="previa-data">${esc(l.dia_semana)}, ${esc(l.data_br)} <span>${l.substitui ? 'troca para' : 'libera'} ${esc(l.pedido_no_ad)}</span></div>
           <div class="previa-antes-depois">
             <span class="mono previa-antes">${esc(l.atual)}</span>
             <span aria-hidden="true">→</span>
