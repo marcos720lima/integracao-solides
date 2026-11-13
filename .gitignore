@@ -54,3 +54,6 @@ giu_debug_*.png
 data/alteracoes_horario.json
 data/horarios_base.json
 data/anexos_horario/
+
+# Fontes Unimed (uso interno, nao redistribuir)
+static/painel/fonts/*.woff2

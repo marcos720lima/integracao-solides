@@ -110,7 +110,7 @@
       </div>
 
       
-      <hr style="border-color:var(--border); margin:18px 0;">
+      <hr style="margin:18px 0;">
       <div class="detalhe-rotulo" style="margin-bottom:10px;">Redefinir senha</div>
       <div class="form-horario" style="margin-bottom:8px;">
         <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
@@ -128,7 +128,7 @@
         <button type="button" class="btn btn-primario" id="btn-redefinir-senha" onclick="piramideRedefinirSenha()">Redefinir senha</button>
       </div>
 
-      <hr style="border-color:var(--border); margin:18px 0;">
+      <hr style="margin:18px 0;">
 
       <p style="font-size:13px; color:var(--text-secondary);">Login secundário: <span id="piramide-login-secundario">—</span></p>
       <p style="font-size:13px; color:var(--text-secondary);">Origem: <span id="piramide-origem">—</span></p>
@@ -137,12 +137,12 @@
       <p style="font-size:13px; color:var(--text-secondary);">Móvel: <span id="piramide-mobile">—</span></p>
       <p style="font-size:13px; color:var(--text-secondary);">Última alteração: <span id="piramide-ultima-alteracao">—</span></p>
 
-      <hr style="border-color:var(--border); margin:18px 0;">
+      <hr style="margin:18px 0;">
 
       <p style="font-size:13px; color:var(--text-secondary);">Status: <span class="badge badge-pendente" id="piramide-status-atual">—</span></p>
       <div id="piramide-resultado-status" style="margin:8px 0; font-size:13px;"></div>
       <button type="button" class="btn btn-primario" onclick="piramideDefinirAtivo(true)">Ativar</button>
-      <button type="button" class="btn btn-primario" onclick="piramideDefinirAtivo(false)" style="background:var(--danger);">Inativar</button>
+      <button type="button" class="btn btn-perigo" onclick="piramideDefinirAtivo(false)">Inativar</button>
     </div>
   </div>
 </div>

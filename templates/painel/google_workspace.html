@@ -104,7 +104,7 @@
     </div>
 
     <div style="display:flex; gap:8px; margin-bottom:16px;">
-      <input type="email" id="input-novo-membro" placeholder="email@empresa.com" style="flex:1; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; font-size:13px; background:var(--card-bg); color:var(--text-primary);">
+      <input type="email" id="input-novo-membro" placeholder="email@empresa.com" class="controle" style="flex:1;">
       <button type="button" class="btn btn-primario" onclick="adicionarMembroGrupo()">Adicionar membro</button>
     </div>
 
@@ -224,7 +224,7 @@
               {% else %}<span class="mono">0</span>{% endif %}
             </td>
             <td>
-              <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+              <button type="button" class="btn-limpar-filtros btn-sm"
                       onclick='abrirColaboradoresDaLicenca({{ l.sku_id|tojson }}, {{ l.sku_nome|tojson }})'>
                 Ver colaboradores
               </button>
@@ -293,7 +293,7 @@
       <!-- ABA GRUPOS -->
       <div class="aba-conteudo" id="aba-google-grupos" style="display:none;">
         <div style="display:flex; gap:8px; margin-bottom:16px;">
-          <input type="email" id="google-user-novo-grupo" placeholder="grupo@empresa.com" style="flex:1; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; font-size:13px; background:var(--card-bg); color:var(--text-primary);">
+          <input type="email" id="google-user-novo-grupo" placeholder="grupo@empresa.com" class="controle" style="flex:1;">
           <button type="button" class="btn btn-primario" onclick="adicionarUsuarioAoGrupo()">Adicionar a grupo</button>
         </div>
         <div id="google-user-grupos-carregando" style="font-size:13px; color:var(--text-secondary);">Carregando grupos…</div>

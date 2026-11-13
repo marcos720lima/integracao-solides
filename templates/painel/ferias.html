@@ -85,7 +85,7 @@
             {% if linha.in_now %}<span class="badge badge-executando">em férias agora</span>{% endif %}
           </td>
           <td>
-            <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+            <button type="button" class="btn-limpar-filtros btn-sm"
                     onclick='programarDoTangerino({{ linha.name|tojson }}, {{ (linha.email or "")|tojson }}, {{ (linha.cpf or "")|tojson }}, {{ linha.start_str|tojson }}, {{ linha.end_str|tojson }})'>
               Programar
             </button>
@@ -169,7 +169,7 @@
     <button type="submit" class="btn btn-primario">Agendar desativação</button>
   </form>
 
-  <hr style="border:none; border-top:1px solid var(--border); margin:20px 0;">
+  <hr style="margin:20px 0;">
 
   <div class="detalhe-rotulo" style="margin-bottom:10px;">Agendamentos</div>
   <div id="lista-agendamentos">
@@ -325,7 +325,7 @@
           <td class="mono">${a.data_fim}</td>
           <td style="font-size:12px;">${(a.sistemas || []).join(', ')}</td>
           <td><span class="badge badge-${cls}">${label}</span></td>
-          <td>${podeCancelar ? `<button type="button" class="btn-limpar-filtros" style="padding:4px 10px;" onclick="cancelarAgendamento('${a.id}')">Cancelar</button>` : ''}</td>
+          <td>${podeCancelar ? `<button type="button" class="btn-limpar-filtros btn-sm" onclick="cancelarAgendamento('${a.id}')">Cancelar</button>` : ''}</td>
         </tr>`;
       }
       html += '</tbody></table>';

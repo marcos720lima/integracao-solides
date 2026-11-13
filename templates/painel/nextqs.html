@@ -45,7 +45,7 @@
           <td class="mono">{{ usuario.email or '—' }}</td>
           <td>{{ usuario.perfil or usuario.profile_id or '—' }}</td>
           <td>
-            <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+            <button type="button" class="btn-limpar-filtros btn-sm"
                     onclick='abrirNextqs({{ usuario.email|tojson }}, {{ usuario.nome|tojson }}, {{ (usuario.perfil or usuario.profile_id)|tojson }})'>
               Ver colab.
             </button>
@@ -82,13 +82,13 @@
         Verificar status (robô)
       </button>
 
-      <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+      <hr style="margin:18px 0;">
 
       <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">
         Inativar executa o robô e pode levar até um minuto.
       </p>
       <div id="nextqs-resultado" style="margin-bottom:10px; font-size:13px;"></div>
-      <button type="button" class="btn btn-primario" id="nextqs-btn-inativar" style="width:100%; background:var(--danger);"
+      <button type="button" class="btn btn-perigo" id="nextqs-btn-inativar" style="width:100%;"
               onclick="inativarNextqs()">Inativar no NextQS</button>
     </div>
   </div>

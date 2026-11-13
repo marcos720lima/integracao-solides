@@ -1,0 +1,17 @@
+Fontes oficiais Unimed (design system "Unimed Oeste do Pará")
+
+Copie para esta pasta (static/painel/fonts) estes 9 arquivos .woff2:
+
+  UnimedSans-Book.woff2
+  UnimedSans-BookItalic.woff2
+  UnimedSans-Regular.woff2
+  UnimedSans-RegularItalic.woff2
+  UnimedSans-SemiBold.woff2
+  UnimedSans-Bold.woff2
+  UnimedSans-ExtraBold.woff2
+  UnimedSansCondensed-Bold.woff2
+  UnimedSansCondensed-ExtraBold.woff2
+
+O style.css ja aponta para eles. Enquanto nao estiverem aqui, o painel usa a fonte
+do sistema (Segoe UI no Windows) e nada quebra.
+As fontes sao de uso da cooperativa: nao redistribuir.

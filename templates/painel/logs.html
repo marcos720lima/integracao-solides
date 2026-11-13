@@ -39,13 +39,13 @@
       const rolarParaFinal = visualizador.scrollTop + visualizador.clientHeight >= visualizador.scrollHeight - 20;
 
       if (!dados.linhas || dados.linhas.length === 0) {
-        visualizador.innerHTML = '<div style="color:#8b93a3;">Nenhuma linha de log ainda.</div>';
+        visualizador.innerHTML = '<div class="linha-vazia">Nenhuma linha de log ainda.</div>';
         return;
       }
       visualizador.innerHTML = dados.linhas.map(formatarLinha).join('');
       if (rolarParaFinal) visualizador.scrollTop = visualizador.scrollHeight;
     } catch (e) {
-      visualizador.innerHTML = '<div style="color:#ff8a8a;">Falha ao carregar os logs.</div>';
+      visualizador.innerHTML = '<div class="linha-erro">Falha ao carregar os logs.</div>';
     }
   }
 

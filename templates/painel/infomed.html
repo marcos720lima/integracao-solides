@@ -89,12 +89,12 @@
           <button type="button" class="btn btn-primario" onclick="infomedSalvarDados()">Salvar dados</button>
         </div>
 
-        <hr style="border-color:var(--border); margin:18px 0;">
+        <hr style="margin:18px 0;">
 
         <p style="font-size:13px; color:var(--text-secondary);">Status: <span class="badge badge-pendente" id="infomed-status-atual">—</span></p>
         <div id="infomed-resultado-status" style="margin:8px 0; font-size:13px;"></div>
         <button type="button" class="btn btn-primario" id="infomed-btn-ativar" onclick="infomedDefinirAtivo(true)">Ativar</button>
-        <button type="button" class="btn btn-primario" id="infomed-btn-inativar" onclick="infomedDefinirAtivo(false)" style="background:var(--danger);">Inativar</button>
+        <button type="button" class="btn btn-perigo" id="infomed-btn-inativar" onclick="infomedDefinirAtivo(false)">Inativar</button>
       </div>
     </div>
 
@@ -125,7 +125,7 @@
         <p style="font-size:11.5px; color:var(--text-muted); margin-bottom:10px;">Clica num perfil pra ativar/desativar.</p>
 
         <div style="display:flex; gap:8px;">
-          <select id="infomed-select-perfil" style="flex:1; border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; font-size:12px; font-family:var(--font-ui); color:var(--text-primary); background:var(--card-bg);">
+          <select id="infomed-select-perfil" class="controle" style="flex:1;">
             {% for codigo, nome in perfis_disponiveis %}
             <option value="{{ codigo }}">{{ nome }}</option>
             {% endfor %}

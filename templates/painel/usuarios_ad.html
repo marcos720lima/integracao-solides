@@ -68,7 +68,7 @@
           <td><span class="badge badge-{{ 'erro' if u.disabled else 'sucesso' }}">{{ 'Desativado' if u.disabled else 'Ativo' }}</span></td>
           <td>{{ u.ou or '—' }}</td>
           <td>
-            <button type="button" class="btn-limpar-filtros" style="padding:5px 12px;"
+            <button type="button" class="btn-limpar-filtros btn-sm"
                     onclick='abrirColaboradorAD({{ u.sam|tojson }}, {{ u.displayName|tojson }}, {{ u.disabled|tojson }}, {{ u.hours|tojson }})'>
               Ver colab.
             </button>
@@ -193,11 +193,11 @@
           <button type="submit" class="btn btn-primario" style="width:100%;">Redefinir senha</button>
         </form>
 
-        <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+        <hr style="margin:18px 0;">
 
         <div class="detalhe-rotulo" style="margin-bottom:10px;">Conta</div>
         <div id="conta-ad-resultado" style="margin-bottom:10px; font-size:13px;"></div>
-        <button type="button" class="btn btn-primario" id="btn-ad-bloquear" style="width:100%; background:var(--danger);"
+        <button type="button" class="btn btn-perigo" id="btn-ad-bloquear" style="width:100%;"
                 onclick="definirBloqueioAD(true)">Bloquear conta</button>
         <button type="button" class="btn btn-primario" id="btn-ad-desbloquear" style="width:100%; margin-top:8px;"
                 onclick="definirBloqueioAD(false)">Desbloquear conta</button>
